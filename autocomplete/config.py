@@ -15,7 +15,14 @@ from typing import Any
 
 import yaml
 
-__all__ = ["Config", "ConfigError", "VALIDATION_LEVELS", "DEFAULT_CONFIG_FILENAME"]
+__all__ = [
+    "Config",
+    "ConfigError",
+    "VALIDATION_LEVELS",
+    "DEFAULT_CONFIG_FILENAME",
+    "default_config_path",
+    "load_default_config",
+]
 
 DEFAULT_CONFIG_FILENAME = "config.yaml"
 
@@ -126,6 +133,17 @@ class Config:
                 f"{path} must contain a mapping of settings, got {type(parsed).__name__}"
             )
         return cls.from_mapping(parsed, base_dir=path.parent)
+
+
+def default_config_path() -> Path:
+    """The config file shipped beside the package, next to ``main.py``."""
+    return Path(__file__).resolve().parent.parent / DEFAULT_CONFIG_FILENAME
+
+
+def load_default_config() -> Config:
+    """Load the project's own configuration, or built-in defaults without it."""
+    path = default_config_path()
+    return Config.from_yaml(path) if path.is_file() else Config()
 
 
 def _resolve_path(value: Any, key: str, base_dir: Path | None) -> Path:
