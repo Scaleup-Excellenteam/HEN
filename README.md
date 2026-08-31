@@ -41,8 +41,8 @@ extracted `Archive.zip` tree.
 | Milestone | Scope | State |
 |---|---|---|
 | M0 | Package scaffold, configuration, fixtures, CI | done |
-| M1 | Normalization, scoring, repair generation and tiers | next |
-| M2 | Brute-force reference implementation, differential harness | planned |
+| M1 | Normalization, scoring, repair generation and tiers | done |
+| M2 | Brute-force reference implementation, differential harness | next |
 | M3 | Corpus walking, record store, cache | planned |
 | M4 | Suffix array, block summaries, exact search | planned |
 | M5 | Fuzzy tier walk, prefilter, `get_best_k_completions` | planned |
@@ -67,6 +67,22 @@ the corpus. Because a repair's score does not depend on which sentence it matche
 walking the tiers from the highest score down and stopping once five results are
 fixed yields the true global top five.
 
+## Testing
+
+```bash
+pytest                       # everything
+pytest tests/test_scoring.py # one area
+```
+
+Two things are worth knowing about the suite. All thirteen scored examples
+printed in the assignment are reproduced as tests. And scoring is checked against
+a second, independently written implementation in
+`tests/support/alignment_reference.py`, which slides a window over the sentence
+instead of enumerating repairs and restates the penalty numbers from the
+appendix rather than importing them, so a mistake in the production table or in
+its repair generation cannot be mirrored there. The two agree on all 15,120
+query/sentence pairs over a small alphabet.
+
 ## Decisions awaiting confirmation
 
 The assignment leaves the following open. Each has a documented default and is
@@ -74,9 +90,9 @@ confined to one place in the code, so a different answer is a local change.
 
 | # | Question | Current default | Where it lives |
 |---|---|---|---|
-| D1 | Is punctuation deleted, or replaced by a space? (`e-mail` to `email` or `e mail`) | Deleted | `autocomplete/normalize.py` (M1) |
+| D1 | Is punctuation deleted, or replaced by a space? (`e-mail` to `email` or `e mail`) | Deleted | `autocomplete/normalize.py`: `PunctuationPolicy`, `DEFAULT_PUNCTUATION_POLICY` |
 | D7' | Which string does alphabetical tie-breaking use? | The original sentence, codepoint order | `autocomplete/data.py`: `tie_break_key` |
-| D9 | May a one-character query be "repaired" by deleting its only character? Are negative scores returned? | Excluded; negative scores are returned | `autocomplete/scoring.py` (M1) |
+| D9 | May a one-character query be "repaired" by deleting its only character? Are negative scores returned? | Excluded; negative scores are returned | `autocomplete/scoring.py`: `ALLOW_EMPTY_REPAIR` |
 | — | Must `#` appear alone to reset, or anywhere in the line? | Anywhere resets | `autocomplete/cli.py` (M6) |
 | — | Is `source_text` a relative path or a basename? | Relative path | `autocomplete/corpus.py` (M3) |
 | — | May a prebuilt index accompany the submission, or is `pip install` available? | Assume `pip install` | `requirements.txt` |
@@ -87,6 +103,8 @@ confined to one place in the code, so a different answer is a local change.
 autocomplete/       production package
   data.py           the AutoCompleteData result record
   config.py         YAML configuration loading and validation
+  normalize.py      canonical text normalization
+  scoring.py        scoring table, repair generation, score tiers
 docs/design/        design review and decision records
 prototypes/         throwaway benchmark scripts from the design review;
                     evidence only, never imported by the package
