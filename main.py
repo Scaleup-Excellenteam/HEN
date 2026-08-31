@@ -1,17 +1,17 @@
 """Command-line entry point.
 
-Runs the offline phase: read the corpus and prepare it for serving, reusing a
-cached index when the corpus has not changed. The suffix array (M4) and the
-interactive completion loop (M6) attach here.
+Prepares the corpus, reusing a cached index when it has not changed, and then
+runs the interactive completion loop. ``--build`` stops after the preparation.
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 
-from autocomplete import __version__
+from autocomplete import __version__, cli
 from autocomplete.cache import POINTER_FILE, build_or_load
 from autocomplete.config import DEFAULT_CONFIG_FILENAME, Config, ConfigError
 from autocomplete.corpus import CorpusNotFoundError
@@ -100,11 +100,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"cache directory  : {_describe_cache(config.cache_dir)}")
     print(f"ready in         : {elapsed:.1f}s")
 
-    if not (args.build or args.rebuild):
+    if args.build or args.rebuild:
+        return 0
+
+    print()
+    try:
+        cli.run(index, sys.stdin, sys.stdout)
+    except KeyboardInterrupt:
         print()
-        print("Completions are not available yet: the fuzzy search that fills in")
-        print("results for a mistyped query arrives in M5, and the interactive")
-        print("loop in M6. See README.md for status.")
     return 0
 
 
