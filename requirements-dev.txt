@@ -2,3 +2,7 @@
 -r requirements.txt
 
 pytest>=8.0,<9.0
+
+# Property-based testing, used by the differential suite that compares the
+# reference engine against a repair-enumeration ranker over generated corpora.
+hypothesis>=6.100,<7.0
