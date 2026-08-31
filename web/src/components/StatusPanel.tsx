@@ -1,7 +1,7 @@
 interface Props {
-  tone: "neutral" | "warning" | "error";
   title: string;
   detail: string;
+  tone?: "neutral" | "warning" | "error";
   action?: { label: string; onClick: () => void };
   busy?: boolean;
 }
@@ -9,32 +9,33 @@ interface Props {
 /**
  * What the page says when there is nothing to show.
  *
- * Every state carries words and an icon shape, never colour alone, so the
- * difference between waiting and failing does not depend on seeing colour.
+ * Quiet by design: these appear in the space the sentences would occupy, so
+ * they read as an explanation rather than an interruption. Every state carries
+ * words, never colour alone, so waiting and failing stay distinguishable
+ * without seeing the difference.
  */
-export function StatusPanel({ tone, title, detail, action, busy = false }: Props) {
-  const accent =
-    tone === "error"
-      ? "text-accent-red"
-      : tone === "warning"
-        ? "text-accent-amber"
-        : "text-ink-faint";
-
+export function StatusPanel({ title, detail, tone = "neutral", action, busy = false }: Props) {
   return (
-    <div className="mt-10 flex flex-col items-center px-4 text-center">
+    <div className="mt-14 flex flex-col items-center px-2 text-center">
       {busy ? (
         <span
-          className="mb-4 h-6 w-6 animate-spin rounded-full border-2 border-hairline border-t-accent-blue"
+          className="mb-4 h-5 w-5 animate-spin rounded-full border-2 border-hairline border-t-accent-blue"
           aria-hidden="true"
         />
       ) : (
         <svg
           viewBox="0 0 24 24"
-          className={`mb-4 h-6 w-6 ${accent}`}
+          className={`mb-4 h-5 w-5 ${
+            tone === "error"
+              ? "text-accent-red"
+              : tone === "warning"
+                ? "text-accent-amber"
+                : "text-ink-faint"
+          }`}
           aria-hidden="true"
           fill="none"
           stroke="currentColor"
-          strokeWidth="1.8"
+          strokeWidth="1.75"
           strokeLinecap="round"
         >
           {tone === "neutral" ? (
@@ -51,14 +52,14 @@ export function StatusPanel({ tone, title, detail, action, busy = false }: Props
         </svg>
       )}
 
-      <p className="text-base font-medium text-ink">{title}</p>
-      <p className="mt-1.5 max-w-md text-sm leading-relaxed text-ink-soft">{detail}</p>
+      <p className="text-[15px] font-medium text-ink">{title}</p>
+      <p className="mt-2 max-w-sm text-sm leading-relaxed text-ink-soft">{detail}</p>
 
       {action && (
         <button
           type="button"
           onClick={action.onClick}
-          className="mt-5 min-h-11 rounded-xl border border-hairline px-4 text-sm font-medium text-ink transition-colors hover:bg-page-sunken"
+          className="mt-6 h-11 rounded-full border border-hairline px-5 text-sm font-medium text-ink transition-colors hover:bg-page-sunken"
         >
           {action.label}
         </button>

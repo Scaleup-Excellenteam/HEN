@@ -17,17 +17,15 @@ export function LogoMark({ className = "h-8 w-8" }: { className?: string }) {
   );
 }
 
-/** The mark beside the product name, for the top of the page. */
+/** The mark beside the product name. */
 export function Wordmark({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="flex items-center gap-3">
-      <LogoMark className={compact ? "h-7 w-7" : "h-10 w-10 sm:h-12 sm:w-12"} />
+    <div className="flex items-center gap-2.5">
+      <LogoMark className={compact ? "h-6 w-6" : "h-9 w-9"} />
       <span
-        className={
-          compact
-            ? "text-xl font-semibold tracking-tight text-ink"
-            : "text-4xl font-semibold tracking-tight text-ink sm:text-5xl"
-        }
+        className={`font-semibold tracking-tight text-ink ${
+          compact ? "text-lg" : "text-3xl"
+        }`}
       >
         HEN
       </span>

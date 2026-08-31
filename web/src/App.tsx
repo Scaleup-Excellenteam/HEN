@@ -16,10 +16,10 @@ export default function App() {
   const listRef = useRef<HTMLOListElement>(null);
 
   const backendReady = health.kind === "ready";
-  const hasResults = search.kind === "results";
-  // Once a search has happened the page becomes a compact working view; before
-  // that it is a single centred prompt.
-  const settled = hasResults || search.kind === "empty" || search.kind === "searching";
+  // Before the first search the page is one centred prompt; afterwards the
+  // field moves up and the sentences take the space.
+  const working =
+    search.kind === "results" || search.kind === "empty" || search.kind === "searching";
 
   const change = useCallback(
     (value: string) => {
@@ -65,8 +65,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [focusInput]);
 
+  const corpusSize =
+    backendReady && health.health.sentences
+      ? `${health.health.sentences.toLocaleString()} sentences from ${health.health.sources?.toLocaleString()} files`
+      : null;
+
   return (
-    <div className="flex min-h-dvh flex-col bg-page">
+    <div className="min-h-dvh bg-page">
       <a
         href="#query"
         className="sr-only rounded-lg bg-accent-blue px-4 py-2 text-white focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-10"
@@ -74,30 +79,19 @@ export default function App() {
         Skip to search
       </a>
 
-      <header className="flex min-h-14 items-center justify-between px-5 py-4 sm:px-8">
-        {/* Before a search the mark is the centred one below, so the header
-            stays empty rather than showing it twice. */}
-        {settled ? <Wordmark compact /> : <span />}
-        <p className="text-xs text-ink-faint">
-          {backendReady && health.health.sentences
-            ? `${health.health.sentences.toLocaleString()} sentences indexed`
-            : " "}
-        </p>
-      </header>
-
-      <main
-        className={`mx-auto w-full max-w-3xl flex-1 px-5 pb-16 sm:px-8 ${
-          settled ? "pt-2" : "flex flex-col justify-center pt-4 sm:-mt-20"
+      <div
+        className={`mx-auto w-full max-w-2xl px-6 ${
+          working ? "pt-8 pb-24" : "flex min-h-dvh flex-col justify-center pb-32"
         }`}
       >
-        {!settled && (
-          <div className="mb-10 flex flex-col items-center text-center">
-            <Wordmark />
-            <p className="mt-4 max-w-md text-balance text-base leading-relaxed text-ink-soft">
+        <header className={working ? "mb-6" : "mb-10 flex flex-col items-center"}>
+          <Wordmark compact={working} />
+          {!working && (
+            <p className="mt-5 text-[15px] text-ink-soft">
               Find a sentence from a fragment of it.
             </p>
-          </div>
-        )}
+          )}
+        </header>
 
         <SearchField
           ref={inputRef}
@@ -109,6 +103,20 @@ export default function App() {
           busy={search.kind === "searching"}
           disabled={!backendReady && health.kind !== "checking"}
         />
+
+        {/* The one line of guidance, shown only where there is nothing else to
+            read, and doubling as the field's description everywhere. */}
+        <p
+          id="query-hint"
+          className={
+            working
+              ? "sr-only"
+              : "mt-5 text-center text-sm text-ink-faint"
+          }
+        >
+          One mistyped character is fine.
+          {corpusSize && !working ? ` Searching ${corpusSize}.` : ""}
+        </p>
 
         {/* Everything that changes without the user acting is announced here. */}
         <p aria-live="polite" className="sr-only">
@@ -124,9 +132,8 @@ export default function App() {
         {health.kind === "preparing" && (
           <StatusPanel
             busy
-            tone="neutral"
             title="Getting the corpus ready"
-            detail="Reading the text files and preparing the search index. This happens once; searching will start on its own."
+            detail="Reading the text files and preparing the index. This happens once, and searching starts on its own."
           />
         )}
 
@@ -134,7 +141,7 @@ export default function App() {
           <StatusPanel
             tone="error"
             title="The search service is not running"
-            detail="Start it with: uvicorn autocomplete.web:create_app --factory --port 8000"
+            detail="Start it with ./run.sh, or with uvicorn autocomplete.web:create_app --factory --port 8000"
             action={{ label: "Try again", onClick: recheck }}
           />
         )}
@@ -142,7 +149,7 @@ export default function App() {
         {health.kind === "failed" && (
           <StatusPanel
             tone="error"
-            title="The search index could not be prepared"
+            title="The index could not be prepared"
             detail={health.detail}
             action={{ label: "Try again", onClick: recheck }}
           />
@@ -151,25 +158,18 @@ export default function App() {
         {backendReady && (
           <>
             {search.kind === "results" && (
-              <>
-                <p className="mt-8 px-3 text-xs text-ink-faint sm:px-4">
-                  {search.results.length} suggestion
-                  {search.results.length === 1 ? "" : "s"}
-                </p>
-                <ResultList
-                  ref={listRef}
-                  results={search.results}
-                  onAccept={accept}
-                  onLeaveTop={focusInput}
-                />
-              </>
+              <ResultList
+                ref={listRef}
+                results={search.results}
+                onAccept={accept}
+                onLeaveTop={focusInput}
+              />
             )}
 
             {search.kind === "empty" && (
               <StatusPanel
-                tone="neutral"
                 title="No suggestions"
-                detail="Nothing in the corpus matches that, even allowing for one mistyped character. Try a shorter fragment."
+                detail="Nothing matches that, even allowing for one mistyped character. Try a shorter fragment."
               />
             )}
 
@@ -201,12 +201,7 @@ export default function App() {
             )}
           </>
         )}
-      </main>
-
-      <footer className="px-5 pb-8 text-center text-xs leading-relaxed text-ink-faint sm:px-8">
-        An optional browser interface over the project's command-line
-        autocomplete. Results, scores and ordering come from the same engine.
-      </footer>
+      </div>
     </div>
   );
 }

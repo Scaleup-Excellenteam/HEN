@@ -25,13 +25,15 @@ describe("first view", () => {
 
     expect(screen.getAllByText("HEN").length).toBeGreaterThan(0);
     expect(screen.getByRole("searchbox", { name: /text to complete/i })).toBeInTheDocument();
-    expect(screen.getByText(/mistype one character/i)).toBeInTheDocument();
+    expect(screen.getByText(/one mistyped character is fine/i)).toBeInTheDocument();
   });
 
-  it("reports how much has been indexed", async () => {
+  it("says how much is being searched", async () => {
     mockApi();
     render(<App />);
-    expect(await screen.findByText(/2,391,950 sentences indexed/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/2,391,950 sentences from 1,504 files/),
+    ).toBeInTheDocument();
   });
 
   it("asks for nothing before anything is typed", async () => {
@@ -102,10 +104,11 @@ describe("results", () => {
 
     const item = await screen.findByRole("listitem");
     expect(within(item).getByText("one of a kind")).toBeInTheDocument();
-    expect(within(item).getByText("deep/more.txt")).toBeInTheDocument();
-    expect(within(item).getByText(/line/)).toHaveTextContent("line 42");
+    // File and line are written together, the way the command line writes them.
+    expect(within(item).getByTitle("deep/more.txt")).toHaveTextContent(
+      "deep/more.txt:42",
+    );
     expect(within(item).getByText(/score/)).toHaveTextContent("score 12");
-    expect(screen.getByText("1 suggestion")).toBeInTheDocument();
   });
 
   it("renders five suggestions in the order the API gave them", async () => {
@@ -116,9 +119,9 @@ describe("results", () => {
 
     const items = await screen.findAllByRole("listitem");
     expect(items).toHaveLength(5);
-    expect(items.map((item) => item.textContent?.slice(1, 6))).toEqual([
+    expect(items.map((item) => item.textContent?.split(":")[0])).toEqual([
       "Alpha",
-      "Beta:",
+      "Beta",
       "Delta",
       "Gamma",
       "Omega",
@@ -329,6 +332,73 @@ describe("live search", () => {
   });
 });
 
+describe("restraint", () => {
+  // The interface earned a complaint about clutter. These keep the removals
+  // deliberate rather than letting them drift back in.
+
+  it("puts nothing beside the field competing with it", async () => {
+    mockApi();
+    const { container } = render(<App />);
+    await ready();
+
+    // Searching happens on typing and on Enter, so the submit control exists
+    // for assistive technology but takes no visual weight.
+    const submit = container.querySelector("button[type='submit']");
+    expect(submit).toHaveClass("sr-only");
+  });
+
+  it("shows no clear button until there is something to clear", async () => {
+    mockApi();
+    render(<App />);
+    await ready();
+
+    expect(
+      screen.queryByRole("button", { name: /clear and start a new sentence/i }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole("searchbox"), "a");
+    expect(
+      screen.getByRole("button", { name: /clear and start a new sentence/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not number the results, since a list already reads in order", async () => {
+    mockApi({ results: fiveCompletions() });
+    render(<App />);
+    await ready();
+    await userEvent.type(screen.getByRole("searchbox"), "this is{Enter}");
+
+    const items = await screen.findAllByRole("listitem");
+    expect(items[0].textContent).not.toMatch(/^\s*1\b/);
+  });
+
+  it("keeps the count out of the page and in the announcement", async () => {
+    mockApi({ results: fiveCompletions() });
+    const { container } = render(<App />);
+    await ready();
+    await userEvent.type(screen.getByRole("searchbox"), "this is{Enter}");
+    await screen.findAllByRole("listitem");
+
+    const live = container.querySelector("[aria-live='polite']");
+    expect(live?.textContent).toContain("5 suggestions.");
+    const visible = screen.queryAllByText(/5 suggestions/).filter(
+      (node) => !node.closest("[aria-live]"),
+    );
+    expect(visible).toEqual([]);
+  });
+
+  it("hides the guidance once there are sentences to read", async () => {
+    mockApi({ results: fiveCompletions() });
+    render(<App />);
+    await ready();
+    expect(screen.getByText(/one mistyped character is fine/i)).toBeVisible();
+
+    await userEvent.type(screen.getByRole("searchbox"), "this is{Enter}");
+    await screen.findAllByRole("listitem");
+    expect(screen.getByText(/one mistyped character is fine/i)).toHaveClass("sr-only");
+  });
+});
+
 describe("accessibility", () => {
   it("labels the search box and describes what it does", async () => {
     mockApi();
@@ -336,7 +406,7 @@ describe("accessibility", () => {
     await ready();
 
     const box = screen.getByRole("searchbox", { name: /text to complete/i });
-    expect(box).toHaveAccessibleDescription(/mistype one character/i);
+    expect(box).toHaveAccessibleDescription(/one mistyped character is fine/i);
   });
 
   it("announces the number of suggestions politely", async () => {

@@ -13,8 +13,11 @@ interface Props {
 /**
  * The search box.
  *
- * A real form, so Enter submits without any key handling of its own, and the
- * browser's own behaviour carries the keyboard.
+ * One field and nothing else. Searching happens as you type and on Enter, so a
+ * button beside the field would be a third way to do what is already happening;
+ * the submit control is kept for assistive technology and for the form's own
+ * semantics, but takes no visual weight. What remains is the field, a mark to
+ * say what it is, and a way to empty it.
  */
 export const SearchField = forwardRef<HTMLInputElement, Props>(function SearchField(
   { value, onChange, onSubmit, onClear, onArrowIntoResults, busy, disabled },
@@ -33,19 +36,27 @@ export const SearchField = forwardRef<HTMLInputElement, Props>(function SearchFi
         Text to complete
       </label>
 
-      <div className="group relative flex items-center rounded-2xl border border-hairline bg-page shadow-[0_1px_2px_rgba(16,24,40,0.04)] transition-shadow focus-within:border-transparent focus-within:shadow-[0_0_0_2px_var(--color-accent-blue),0_8px_24px_rgba(16,24,40,0.08)] hover:shadow-[0_2px_10px_rgba(16,24,40,0.07)]">
-        <svg
-          viewBox="0 0 24 24"
-          className="ml-4 h-5 w-5 shrink-0 text-ink-faint"
+      <div className="relative">
+        <span
+          className="pointer-events-none absolute inset-y-0 left-0 flex w-11 items-center justify-center"
           aria-hidden="true"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
         >
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
+          {busy ? (
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-hairline border-t-accent-blue" />
+          ) : (
+            <svg
+              viewBox="0 0 24 24"
+              className="h-[18px] w-[18px] text-ink-faint"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+          )}
+        </span>
 
         <input
           id="query"
@@ -59,7 +70,7 @@ export const SearchField = forwardRef<HTMLInputElement, Props>(function SearchFi
           enterKeyHint="search"
           aria-describedby="query-hint"
           placeholder="Type part of a sentence"
-          className="min-h-12 w-full bg-transparent px-3 py-3.5 text-base text-ink placeholder:text-ink-faint focus:outline-none disabled:cursor-not-allowed sm:text-lg"
+          className="h-14 w-full rounded-full border border-hairline bg-page pl-11 pr-11 text-[15px] text-ink shadow-sm transition-[border-color,box-shadow] placeholder:text-ink-faint hover:border-ink-faint/40 focus:border-accent-blue focus:shadow-[0_0_0_3px_rgb(37_99_235_/_0.12)] focus:outline-none disabled:cursor-not-allowed disabled:bg-page-sunken sm:text-base"
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") {
@@ -76,13 +87,13 @@ export const SearchField = forwardRef<HTMLInputElement, Props>(function SearchFi
           <button
             type="button"
             onClick={onClear}
-            className="mr-1 flex h-11 w-11 items-center justify-center rounded-full text-ink-faint transition-colors hover:bg-page-sunken hover:text-ink"
-            title="Clear the sentence and start again (# in the command line)"
+            title="Clear and start a new sentence"
+            className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-ink-faint transition-colors hover:text-ink"
           >
             <span className="sr-only">Clear and start a new sentence</span>
             <svg
               viewBox="0 0 24 24"
-              className="h-5 w-5"
+              className="h-[18px] w-[18px]"
               aria-hidden="true"
               fill="none"
               stroke="currentColor"
@@ -93,27 +104,13 @@ export const SearchField = forwardRef<HTMLInputElement, Props>(function SearchFi
             </svg>
           </button>
         )}
-
-        <div className="mr-2 h-6 w-px bg-hairline" aria-hidden="true" />
-
-        <button
-          type="submit"
-          disabled={disabled}
-          className="mr-2 flex min-h-11 items-center gap-2 rounded-xl bg-accent-blue px-4 text-sm font-medium text-white transition-[background-color,opacity] hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {busy && (
-            <span
-              className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white"
-              aria-hidden="true"
-            />
-          )}
-          Search
-        </button>
       </div>
 
-      <p id="query-hint" className="mt-3 text-center text-sm text-ink-soft">
-        Finds the sentence even if you mistype one character.
-      </p>
+      {/* Present for assistive technology and to give the form a submit
+          control; typing and Enter already search. */}
+      <button type="submit" disabled={disabled} className="sr-only">
+        Search
+      </button>
     </form>
   );
 });
