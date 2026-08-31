@@ -38,10 +38,10 @@ pip install -r requirements-dev.txt
 ## Usage
 
 ```bash
-python main.py --help      # options
+python main.py             # prepare the index, then take queries
 python main.py --build     # prepare the index, then exit
 python main.py --rebuild   # prepare it again even if the cache is current
-python main.py             # show the configuration and prepare the index
+python main.py --help      # options
 pytest                     # run the test suite
 ```
 
@@ -60,26 +60,35 @@ directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 | M3 | Corpus walking, record store, cache | done |
 | M4 | Suffix array, block summaries, exact search | done |
 | M5 | Fuzzy tier walk, `get_best_k_completions` | done |
-| M6 | Interactive command line | next |
-| M7 | Benchmarks against the performance gates | planned |
+| M6 | Interactive command line | done |
+| M7 | Benchmarks against the performance gates | next |
 
-Completions work, including for mistyped queries. What is missing is the
-interactive loop of M6, so for now queries are made from Python:
+The program works end to end. `python main.py` prepares the corpus and then
+takes queries:
+
+```
+The system is ready. Enter your text:
+the internet protocl
+Here are 5 suggestions:
+1.    Gont, F., "Security Assessment of the Internet Protocol (rfc7707.txt:1617, score=38)
+2.    Values In the Internet Protocol and Related Headers", (rfc7679.txt:1334, score=38)
+...
+the internet protocl
+```
+
+The missing "o" costs two points off the 40 an exact match of those 20
+characters would score. Typing continues from where it stopped, so the text
+already entered is shown as the prompt and whatever comes next is added to it.
+Entering `#` finishes the sentence and starts over; end of input, or Ctrl-D,
+ends the session.
+
+The same search is available from Python:
 
 ```python
 from autocomplete import get_best_k_completions
 
 for suggestion in get_best_k_completions("the internet protocl"):
     print(suggestion)
-```
-
-The missing "o" costs two points off the 40 an exact match of those 20
-characters would score:
-
-```
-   Gont, F., "Security Assessment of the Internet Protocol (rfc7707.txt:1617, score=38)
-   Values In the Internet Protocol and Related Headers", (rfc7679.txt:1334, score=38)
-   ...
 ```
 
 The first call prepares the corpus, which takes about 17 seconds the first time
@@ -181,6 +190,7 @@ pytest tests/test_scoring.py      # the scoring table and repairs
 pytest tests/test_records.py tests/test_cache.py   # the offline phase
 pytest tests/test_suffix_index.py tests/test_topk.py tests/test_exact_search.py
 pytest tests/test_engine.py tests/test_engine_differential.py   # the tier walk
+pytest tests/test_cli.py          # the interactive loop
 ```
 
 The search tests check every answer against one computed directly: suffix order
@@ -212,7 +222,7 @@ confined to one place in the code, so a different answer is a local change.
 | D1 | Is punctuation deleted, or replaced by a space? (`e-mail` to `email` or `e mail`) | Deleted | `autocomplete/normalize.py`: `PunctuationPolicy`, `DEFAULT_PUNCTUATION_POLICY` |
 | D7' | Which string does alphabetical tie-breaking use? | The original sentence, codepoint order | `autocomplete/data.py`: `tie_break_key` |
 | D9 | May a one-character query be "repaired" by deleting its only character? Are negative scores returned? | Excluded; negative scores are returned | `autocomplete/scoring.py`: `ALLOW_EMPTY_REPAIR` |
-| — | Must `#` appear alone to reset, or anywhere in the line? | Anywhere resets | `autocomplete/cli.py` (M6) |
+| — | Must `#` appear alone to reset, or anywhere in the line? | Anywhere resets, and the rest of that line is discarded | `autocomplete/cli.py`: `RESET_CHARACTER`, `_is_reset` |
 | — | Is `source_text` a relative path or a basename? | Relative path | `autocomplete/corpus.py` (M3) |
 | — | May a prebuilt index accompany the submission, or is `pip install` available? | Assume `pip install` | `requirements.txt` |
 
@@ -230,6 +240,7 @@ autocomplete/       production package
   topk.py           block summaries, for picking winners from a huge range
   index.py          the record store and its search structures as one unit
   engine.py         answering queries: the score-tier walk
+  cli.py            the interactive completion loop
   cache.py          storing and validating a built index
   reference.py      slow brute-force engine used to define correctness
 docs/design/        design review and decision records

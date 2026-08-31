@@ -175,8 +175,13 @@ for itself.
 
 The prefilter is the better first move if this matters: it is proven
 correctness-neutral in the review, and it targets the measured class exactly.
-The interactive loop of M6 will show whether it does matter, since typing
-produces mostly short, growing queries, which are already the fastest case.
+
+**Answered by M6.** Typing was measured turn by turn, and every prefix of a real
+sentence, at every length from 1 to 30 characters, filled its five results from
+the exact tier in under 2 ms, so the fuzzy walk never ran at all. The slow class
+survives only for a complete sentence entered at once that matches nothing,
+which is a paste rather than typing. The prefilter is therefore not worth its
+correctness surface; see `2026-08-31-m6-implementation-notes.md`.
 
 ## Deviations from the design review
 
