@@ -12,8 +12,20 @@ and is superseded wherever the two disagree.)
 ## Requirements
 
 - Python 3.10 or newer
-- Dependencies from `requirements.txt` (`PyYAML`, and from milestone M3 onward
-  `numpy` and `pydivsufsort`)
+- Dependencies from `requirements.txt`: `PyYAML`, `numpy`, and `pydivsufsort`
+
+`pydivsufsort` builds the suffix array. If it is missing or its compiled
+extension does not work, the build stops with a message naming the package and
+the install command rather than falling back to something slower: the design
+review measured the pure-Python alternative at over ten minutes and four
+gigabytes, which is not a fallback worth having. Before indexing, the build runs
+a self-test that constructs a suffix array for a short string and compares it
+against the order computed directly, so a broken installation is caught in
+milliseconds rather than part-way through the corpus. To check an environment:
+
+```bash
+python -c "from autocomplete.suffix_index import verify_builder; verify_builder()"
+```
 
 ## Setup
 
@@ -46,22 +58,45 @@ directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 | M1 | Normalization, scoring, repair generation and tiers | done |
 | M2 | Brute-force reference implementation, differential harness | done |
 | M3 | Corpus walking, record store, cache | done |
-| M4 | Suffix array, block summaries, exact search | next |
-| M5 | Fuzzy tier walk, prefilter, `get_best_k_completions` | planned |
+| M4 | Suffix array, block summaries, exact search | done |
+| M5 | Fuzzy tier walk, prefilter, `get_best_k_completions` | next |
 | M6 | Interactive command line | planned |
 | M7 | Benchmarks against the performance gates | planned |
 
 `get_best_k_completions` is importable now and raises `NotImplementedError`
-until M5. There is no working autocomplete program yet: the corpus can be
-prepared for searching, but the search itself and the interactive loop do not
-exist.
+until M5. There is no usable autocomplete program yet: the corpus is indexed and
+exact matches can be found internally, but a mistyped query still finds nothing,
+and there is no interactive loop.
 
 ## Preparing the corpus
 
 The offline phase reads every `.txt` file under `corpus_root`, normalizes each
-line, and stores the result for searching. On the 1,504-file corpus that is
-2,391,950 sentences: about 7 seconds to build and a 251 MB cache, after which
-start-up takes a tenth of a second.
+line, and builds the structures that search it. On the 1,504-file corpus that is
+2,391,950 sentences: about 17 seconds to build and a 659 MB cache, after which
+start-up takes a quarter of a second.
+
+```
+read 2,391,950 sentences from 1,504 files in 6.6s
+built the suffix array over 98.7 MB in 3.8s
+summarized 24,105 blocks of 4096 in 5.9s
+```
+
+Three artifacts do the work:
+
+- **The normalized text**, all sentences joined with a separator that
+  normalization can never produce. Searching this one string is what makes a
+  match unable to run from one sentence into the next.
+- **A suffix array** over that text: every position, ordered by the text
+  starting there. Because the order is sorted, all the places a pattern occurs
+  form one contiguous run, found by two binary searches in around 20
+  microseconds regardless of how long the pattern is. It stores positions, not
+  text, so it costs four bytes per character.
+- **Block summaries**, holding for each 4,096 suffix-array entries the smallest
+  record numbers they cover. A common pattern occupies an enormous range: a
+  single space occurs thirteen million times. Since records are stored in
+  tie-break order, the answer is the smallest record numbers in the range, and
+  the summaries give that without reading it: 0.6 milliseconds instead of the
+  1.3 seconds reading every entry takes. They cost 0.48 MB.
 
 The cache is written as a generation directory and adopted by renaming a small
 `CURRENT` pointer onto it, so a build that is interrupted leaves the previous
@@ -117,7 +152,12 @@ pytest tests/test_reference.py    # the reference engine
 pytest tests/test_differential.py # the two rankers compared
 pytest tests/test_scoring.py      # the scoring table and repairs
 pytest tests/test_records.py tests/test_cache.py   # the offline phase
+pytest tests/test_suffix_index.py tests/test_topk.py tests/test_exact_search.py
 ```
+
+The search tests check every answer against one computed directly: suffix order
+against Python's own sort of the suffixes, ranges against a scan for the
+pattern, and block top-k against reading the range entry by entry.
 
 All thirteen scored examples printed in the assignment are reproduced as tests,
 and the worked example session is checked end to end against the fixture corpus.
@@ -158,6 +198,10 @@ autocomplete/       production package
   scoring.py        scoring table, repair generation, score tiers
   corpus.py         finding and reading the corpus files
   records.py        the sentences, laid out for searching
+  suffix_index.py   the suffix array and exact range lookup
+  topk.py           block summaries, for picking winners from a huge range
+  index.py          the record store and its search structures as one unit
+  engine.py         answering queries; exact matches so far
   cache.py          storing and validating a built index
   reference.py      slow brute-force engine used to define correctness
 docs/design/        design review and decision records
