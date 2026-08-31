@@ -63,6 +63,10 @@ directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 | M6 | Interactive command line | done |
 | M7 | Benchmarks against the performance gates | done |
 
+An optional browser interface is included as an extension; see
+[Web interface](#web-interface-optional). The command line remains the interface
+the assignment asks for, and the engine is unchanged.
+
 The program works end to end. `python main.py` prepares the corpus and then
 takes queries:
 
@@ -193,6 +197,83 @@ pytest tests/test_engine.py tests/test_engine_differential.py   # the tier walk
 pytest tests/test_cli.py          # the interactive loop
 ```
 
+## Web interface (optional)
+
+A browser front end over the same engine, in `web/`. It is an extension: the
+command line is the assignment-compatible interface, and nothing about the
+search, the scoring or the ordering differs between them.
+
+```
+React (web/)  ->  FastAPI (autocomplete/web/)  ->  find_completions  ->  SearchIndex
+```
+
+### Running it
+
+Two processes. Prepare the index first, so the first browser request is not
+waiting on it:
+
+```bash
+pip install -r requirements-dev.txt          # includes fastapi and uvicorn
+python main.py --build                       # prepare the corpus index
+
+python -m uvicorn autocomplete.web:create_app --factory --port 8000   # terminal 1
+cd web && npm install && npm run dev                                  # terminal 2
+```
+
+Then open <http://localhost:5173>. The dev server proxies `/api` to port 8000.
+The index is prepared once per server process; if the API is started before the
+index is built, the page shows a "getting the corpus ready" state and starts
+working on its own when it finishes.
+
+### Frontend commands
+
+```bash
+cd web
+npm run dev         # development server
+npm test            # tests
+npm run lint        # linting
+npm run typecheck   # type checking
+npm run build       # production build into web/dist
+npm run preview     # serve that build
+```
+
+### The API
+
+```bash
+curl 'http://127.0.0.1:8000/api/health'
+curl 'http://127.0.0.1:8000/api/complete?q=the%20internet%20protocl'
+```
+
+```json
+{
+  "query": "the internet protocl",
+  "count": 5,
+  "results": [
+    {
+      "completed_sentence": "   Gont, F., \"Security Assessment of the Internet Protocol",
+      "source_text": "rfc7707.txt",
+      "offset": 1617,
+      "score": 38
+    }
+  ]
+}
+```
+
+`/api/health` reports `preparing`, `ready` or `failed`. Results come back in the
+engine's order and are not re-ranked anywhere. Design decisions are recorded in
+[docs/design/2026-08-31-web-extension-notes.md](docs/design/2026-08-31-web-extension-notes.md).
+
+### If something is not working
+
+| Symptom | Cause and fix |
+|---|---|
+| "The search service is not running" | The API is not up. Start it with the uvicorn command above. |
+| The page waits on "getting the corpus ready" | The index is being built, which takes about 17 seconds the first time. It resolves on its own. |
+| "The search index could not be prepared" | `corpus_root` in `config.yaml` does not point at the text files. |
+| The API exits complaining about `pydivsufsort` | `pip install -r requirements.txt`, then check with `python -c "from autocomplete.suffix_index import verify_builder; verify_builder()"`. |
+| The frontend fails to start after a pull | Dependencies are stale: `cd web && rm -rf node_modules && npm install`. |
+| Searches return nothing at all | Confirm the API answers: `curl http://127.0.0.1:8000/api/health`. |
+
 ## Benchmarks
 
 ```bash
@@ -259,10 +340,12 @@ autocomplete/       production package
   cli.py            the interactive completion loop
   cache.py          storing and validating a built index
   reference.py      slow brute-force engine used to define correctness
+autocomplete/web/   the optional HTTP API over the engine
 benchmarks/         the performance harness and its gates
 docs/design/        design review and decision records
 prototypes/         throwaway benchmark scripts from the design review;
                     evidence only, never imported by the package
+web/                the optional React interface
 tests/              test suite, including the fixture corpus
   support/          test-only helpers, such as the enumeration ranker
 ```
