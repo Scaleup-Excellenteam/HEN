@@ -59,14 +59,32 @@ directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 | M2 | Brute-force reference implementation, differential harness | done |
 | M3 | Corpus walking, record store, cache | done |
 | M4 | Suffix array, block summaries, exact search | done |
-| M5 | Fuzzy tier walk, prefilter, `get_best_k_completions` | next |
-| M6 | Interactive command line | planned |
+| M5 | Fuzzy tier walk, `get_best_k_completions` | done |
+| M6 | Interactive command line | next |
 | M7 | Benchmarks against the performance gates | planned |
 
-`get_best_k_completions` is importable now and raises `NotImplementedError`
-until M5. There is no usable autocomplete program yet: the corpus is indexed and
-exact matches can be found internally, but a mistyped query still finds nothing,
-and there is no interactive loop.
+Completions work, including for mistyped queries. What is missing is the
+interactive loop of M6, so for now queries are made from Python:
+
+```python
+from autocomplete import get_best_k_completions
+
+for suggestion in get_best_k_completions("the internet protocl"):
+    print(suggestion)
+```
+
+The missing "o" costs two points off the 40 an exact match of those 20
+characters would score:
+
+```
+   Gont, F., "Security Assessment of the Internet Protocol (rfc7707.txt:1617, score=38)
+   Values In the Internet Protocol and Related Headers", (rfc7679.txt:1334, score=38)
+   ...
+```
+
+The first call prepares the corpus, which takes about 17 seconds the first time
+and a quarter of a second afterwards. Call `get_default_index()` beforehand to
+control when that happens, or pass it a `Config` to search a different corpus.
 
 ## Preparing the corpus
 
@@ -125,6 +143,15 @@ the corpus. Because a repair's score does not depend on which sentence it matche
 walking the tiers from the highest score down and stopping once five results are
 fixed yields the true global top five.
 
+The query itself is the first tier, scoring twice its length, and nothing can
+beat it: any repair either loses a matching character or pays at least two
+points. So a query that occurs in five sentences is answered without considering
+a single repair. When it does not, each tier is processed in full before its
+winners are chosen, because the patterns within one tier are equally good.
+Sentences already chosen from a better tier are excluded, so each appears once
+with its best score. `docs/design/2026-08-31-m5-implementation-notes.md` sets
+out why this returns the true global best five.
+
 ## The reference engine
 
 `autocomplete/reference.py` is a second, deliberately slow implementation that
@@ -153,6 +180,7 @@ pytest tests/test_differential.py # the two rankers compared
 pytest tests/test_scoring.py      # the scoring table and repairs
 pytest tests/test_records.py tests/test_cache.py   # the offline phase
 pytest tests/test_suffix_index.py tests/test_topk.py tests/test_exact_search.py
+pytest tests/test_engine.py tests/test_engine_differential.py   # the tier walk
 ```
 
 The search tests check every answer against one computed directly: suffix order
@@ -201,7 +229,7 @@ autocomplete/       production package
   suffix_index.py   the suffix array and exact range lookup
   topk.py           block summaries, for picking winners from a huge range
   index.py          the record store and its search structures as one unit
-  engine.py         answering queries; exact matches so far
+  engine.py         answering queries: the score-tier walk
   cache.py          storing and validating a built index
   reference.py      slow brute-force engine used to define correctness
 docs/design/        design review and decision records
