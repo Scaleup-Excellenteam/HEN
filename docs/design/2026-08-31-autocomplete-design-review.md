@@ -1,6 +1,15 @@
 # Autocomplete (Part A) — Design Review & Algorithm Decision Record
 
-**Date:** 2026-08-31 · **Status:** Proposed (supersedes the initial draft design) · **Team:** 3 developers
+**Date:** 2026-08-31 · **Status:** Superseded in part by **v2** (`2026-08-31-autocomplete-design-review-v2.md`) · **Team:** 3 developers
+
+> **v2 note:** a second, measurement-driven review validated this architecture but
+> corrected several claims. Where the two documents disagree, **v2 wins**. Key
+> corrections: block-summary top-k index added (the full-scan path here measures
+> 387 ms worst and breaks gates); "9 smallest per pattern" is now 5 (proven);
+> tie-break key is the **original** sentence (D7′), pending TA; the tab-handling bug
+> in the normalizer is fixed; the numpy SA fallback failed measurement and is a last
+> resort; cache atomicity is via generation dirs + pointer file, not directory
+> `os.replace`; short-query precompute is unnecessary (measured).
 
 This document is a fresh, from-scratch review of the assignment in
 `google_project_2026_part_a.docx`. The previously proposed design is treated as an
