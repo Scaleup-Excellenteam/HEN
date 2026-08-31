@@ -38,6 +38,7 @@ pip install -r requirements-dev.txt
 ## Usage
 
 ```bash
+./run.sh                   # build everything and run it in a browser
 python main.py             # prepare the index, then take queries
 python main.py --build     # prepare the index, then exit
 python main.py --rebuild   # prepare it again even if the cache is current
@@ -209,8 +210,27 @@ React (web/)  ->  FastAPI (autocomplete/web/)  ->  find_completions  ->  SearchI
 
 ### Running it
 
-Two processes. Prepare the index first, so the first browser request is not
-waiting on it:
+One command builds everything and starts it:
+
+```bash
+./run.sh
+```
+
+It installs dependencies, prepares the search index, builds the interface, and
+starts both servers, then prints where to open it (<http://localhost:4173>).
+Anything already running is stopped first, so it can be run again at any time
+and always leaves one API and one freshly built interface. Ctrl-C stops both.
+
+```bash
+./run.sh --dev            # serve from the development server instead, with reloading
+./run.sh --stop           # stop whatever is running
+./run.sh --rebuild-index  # discard the cached index and build it again
+./run.sh --skip-install   # trust the installed dependencies, and start faster
+```
+
+Logs from the two servers go to `.run/api.log` and `.run/web.log`.
+
+To run the pieces separately instead:
 
 ```bash
 pip install -r requirements-dev.txt          # includes fastapi and uvicorn
@@ -220,7 +240,7 @@ python -m uvicorn autocomplete.web:create_app --factory --port 8000   # terminal
 cd web && npm install && npm run dev                                  # terminal 2
 ```
 
-Then open <http://localhost:5173>. The dev server proxies `/api` to port 8000.
+Then open <http://localhost:5173>. Either server proxies `/api` to port 8000.
 The index is prepared once per server process; if the API is started before the
 index is built, the page shows a "getting the corpus ready" state and starts
 working on its own when it finishes.
@@ -271,7 +291,8 @@ engine's order and are not re-ranked anywhere. Design decisions are recorded in
 | The page waits on "getting the corpus ready" | The index is being built, which takes about 17 seconds the first time. It resolves on its own. |
 | "The search index could not be prepared" | `corpus_root` in `config.yaml` does not point at the text files. |
 | The API exits complaining about `pydivsufsort` | `pip install -r requirements.txt`, then check with `python -c "from autocomplete.suffix_index import verify_builder; verify_builder()"`. |
-| The frontend fails to start after a pull | Dependencies are stale: `cd web && rm -rf node_modules && npm install`. |
+| The frontend fails to start after a pull | Dependencies are stale: `cd web && rm -rf node_modules && npm install`, or just `./run.sh`. |
+| A port is already in use | `./run.sh --stop`, which frees ports 8000, 5173 and 4173 whatever is holding them. |
 | Searches return nothing at all | Confirm the API answers: `curl http://127.0.0.1:8000/api/health`. |
 
 ## Benchmarks

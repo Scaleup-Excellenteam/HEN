@@ -29,4 +29,7 @@ web/dist/
 web/coverage/
 web/.vite/
 *.tsbuildinfo
+
+# Logs from run.sh
+.run/
 *.local
