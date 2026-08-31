@@ -74,6 +74,35 @@ it belongs to the newest one, so a slow answer to an earlier query can never
 replace a later one; the previous request is also aborted when a new one starts.
 An empty query is answered without a request.
 
+## Visual design
+
+The first version was cluttered, and the fix was subtraction rather than
+restyling. A results screen had carried six things competing for attention: a
+search bar holding five controls, permanent guidance beneath it, a count above a
+list that was already numbered, three middot-separated facts per row, a corpus
+size in the header, and a footer paragraph.
+
+What was removed, and why each was safe to remove:
+
+| Removed | Because |
+|---|---|
+| The button beside the field | Typing and Enter already search; it was a third route to the same thing. The submit control remains for assistive technology, without visual weight. |
+| The count above the list | A list reads as a list. The number is announced to screen readers, where it is not otherwise available. |
+| The ordinal number on each row | Same reason. |
+| The corpus size in the header | It appears once in the opening line, where it is information rather than furniture. |
+| The footer paragraph | Nothing depended on it. |
+| The permanent guidance | Shown on the first screen only, and kept as the field's description everywhere else. |
+
+A row became the sentence over one quiet line: the file and line written
+together the way the command line writes them, and the score right-aligned so
+the scores form a column that can be read down.
+
+The change that carries the most weight is an alignment one. The field's text
+and every sentence now begin on the same left rail, so the column reads as one
+thing rather than two that nearly line up.
+
+Five tests assert the removals, so they stay deliberate.
+
 ## Accessibility decisions
 
 The results are ordinary buttons inside an ordered list, not a combobox. Native
