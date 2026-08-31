@@ -1,0 +1,13 @@
+[project]
+name = "autocomplete"
+version = "0.1.0"
+description = "Sentence autocomplete over a text corpus with at most one character edit"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+# Tests import the `autocomplete` package straight from the repository root, so
+# the project needs no installation step.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

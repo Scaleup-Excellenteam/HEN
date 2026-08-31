@@ -1,0 +1,8 @@
+Mixed   CASE and	tabs inside a line.
+Punctuation, punctuation; everywhere!
+Alpha: this is a demo.
+   Leading and trailing spaces   
+
+   
+Naive cafe — em dash and é accents.
+Digits 123 and 0 stay.

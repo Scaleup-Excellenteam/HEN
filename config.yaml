@@ -1,0 +1,23 @@
+# Autocomplete configuration.
+#
+# Every key is optional; the value shown is the default. Relative paths are
+# resolved against the directory holding this file, so the program behaves the
+# same regardless of the working directory.
+
+# Directory tree containing the corpus .txt files (the extracted Archive.zip).
+corpus_root: ../ArchiveFiles
+
+# Where generated index artifacts are written. Ignored by git.
+cache_dir: .cache
+
+# Number of completions to return.
+num_results: 5
+
+# Memory-map index artifacts instead of reading them fully into RAM.
+use_mmap: true
+
+# Cache validation on load:
+#   structural - manifest, dtypes and shapes only (fastest)
+#   content    - also re-hash the corpus to detect edited source files (default)
+#   full       - also checksum every cached artifact (use after a crash)
+validation_level: content

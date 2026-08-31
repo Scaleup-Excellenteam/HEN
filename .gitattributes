@@ -1,0 +1,3 @@
+# Fixture corpora are byte-exact test inputs: never translate line endings,
+# otherwise normalization and hashing tests differ across platforms.
+tests/fixtures/** -text

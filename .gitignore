@@ -1,3 +1,24 @@
-.DS_Store
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Generated index artifacts and caches (see docs/design ADR: cache generations)
+.cache/
+cache/
+artifacts/
+prototypes/artifacts/
+*.npy
+*.bin
+
+# Benchmark output
+benchmarks/results/
+
+# OS
+.DS_Store

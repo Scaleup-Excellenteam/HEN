@@ -1,0 +1,13 @@
+# Runtime dependencies.
+#
+# Versions are constrained to the majors validated in the design review
+# (docs/design/2026-08-31-autocomplete-design-review-v2.md ss7): upper bounds keep a
+# future major release from silently changing index or serving behaviour.
+#
+# numpy and pydivsufsort are not imported before M3/M4, but are pinned and
+# installed in CI from M0 so that wheel availability in the target environment is
+# validated early rather than at integration time (ADR ss7, dependency risk).
+
+PyYAML>=6.0,<7.0
+numpy>=1.26,<3.0
+pydivsufsort>=0.0.14,<0.1
