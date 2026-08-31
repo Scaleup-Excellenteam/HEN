@@ -17,7 +17,7 @@ from autocomplete.scoring import (
     repair_tiers,
     substitution_score,
 )
-from tests.support.alignment_reference import best_alignment_score
+from autocomplete.reference import best_alignment_score
 
 
 def raw_repairs(query: bytes, alphabet: bytes = ALPHABET):

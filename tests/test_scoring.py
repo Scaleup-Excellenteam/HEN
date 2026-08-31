@@ -21,7 +21,7 @@ from autocomplete.scoring import (
     substitution_penalty,
     substitution_score,
 )
-from tests.support.alignment_reference import best_alignment_score
+from autocomplete.reference import best_alignment_score
 
 APPENDIX_SENTENCE = "To be or not to be, that is the question."
 
