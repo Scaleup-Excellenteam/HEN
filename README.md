@@ -27,7 +27,9 @@ pip install -r requirements-dev.txt
 
 ```bash
 python main.py --help      # options
-python main.py             # show the resolved configuration
+python main.py --build     # prepare the index, then exit
+python main.py --rebuild   # prepare it again even if the cache is current
+python main.py             # show the configuration and prepare the index
 pytest                     # run the test suite
 ```
 
@@ -43,15 +45,35 @@ directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 | M0 | Package scaffold, configuration, fixtures, CI | done |
 | M1 | Normalization, scoring, repair generation and tiers | done |
 | M2 | Brute-force reference implementation, differential harness | done |
-| M3 | Corpus walking, record store, cache | next |
-| M4 | Suffix array, block summaries, exact search | planned |
+| M3 | Corpus walking, record store, cache | done |
+| M4 | Suffix array, block summaries, exact search | next |
 | M5 | Fuzzy tier walk, prefilter, `get_best_k_completions` | planned |
 | M6 | Interactive command line | planned |
 | M7 | Benchmarks against the performance gates | planned |
 
 `get_best_k_completions` is importable now and raises `NotImplementedError`
-until M5. There is no working autocomplete program yet: the corpus is not
-indexed and the interactive loop does not exist.
+until M5. There is no working autocomplete program yet: the corpus can be
+prepared for searching, but the search itself and the interactive loop do not
+exist.
+
+## Preparing the corpus
+
+The offline phase reads every `.txt` file under `corpus_root`, normalizes each
+line, and stores the result for searching. On the 1,504-file corpus that is
+2,391,950 sentences: about 7 seconds to build and a 251 MB cache, after which
+start-up takes a tenth of a second.
+
+The cache is written as a generation directory and adopted by renaming a small
+`CURRENT` pointer onto it, so a build that is interrupted leaves the previous
+cache untouched and a reader never sees a half-written index. It is rebuilt
+automatically whenever the corpus changes; `validation_level` in `config.yaml`
+chooses how thoroughly that is checked:
+
+| Level | Checks | Cost at start-up |
+|---|---|---|
+| `structural` | manifest, array shapes, file sizes | negligible; does not read the corpus, so an edited corpus goes unnoticed |
+| `content` (default) | also the corpus fingerprint, catching edits that leave file sizes unchanged | about 0.3 s |
+| `full` | also a checksum of every stored file | about 0.5 s; worth it after a crash |
 
 ## How matching works
 
@@ -90,10 +112,11 @@ ordering policy, since those must be identical rather than merely equivalent.
 ## Testing
 
 ```bash
-pytest                            # everything, about two seconds
+pytest                            # everything, about five seconds
 pytest tests/test_reference.py    # the reference engine
 pytest tests/test_differential.py # the two rankers compared
 pytest tests/test_scoring.py      # the scoring table and repairs
+pytest tests/test_records.py tests/test_cache.py   # the offline phase
 ```
 
 All thirteen scored examples printed in the assignment are reproduced as tests,
@@ -133,6 +156,9 @@ autocomplete/       production package
   config.py         YAML configuration loading and validation
   normalize.py      canonical text normalization
   scoring.py        scoring table, repair generation, score tiers
+  corpus.py         finding and reading the corpus files
+  records.py        the sentences, laid out for searching
+  cache.py          storing and validating a built index
   reference.py      slow brute-force engine used to define correctness
 docs/design/        design review and decision records
 prototypes/         throwaway benchmark scripts from the design review;
