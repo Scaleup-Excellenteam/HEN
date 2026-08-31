@@ -61,7 +61,7 @@ directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 | M4 | Suffix array, block summaries, exact search | done |
 | M5 | Fuzzy tier walk, `get_best_k_completions` | done |
 | M6 | Interactive command line | done |
-| M7 | Benchmarks against the performance gates | next |
+| M7 | Benchmarks against the performance gates | done |
 
 The program works end to end. `python main.py` prepares the corpus and then
 takes queries:
@@ -193,6 +193,22 @@ pytest tests/test_engine.py tests/test_engine_differential.py   # the tier walk
 pytest tests/test_cli.py          # the interactive loop
 ```
 
+## Benchmarks
+
+```bash
+python -m benchmarks            # measure the configured corpus against the gates
+python -m benchmarks --build    # also time a cold build, in a temporary cache
+python -m benchmarks --json out.json
+```
+
+Latency is judged per query class, never on a blended figure, so a slow class
+cannot hide behind a fast one. The run exits non-zero if any limit is breached.
+On the 1,504-file corpus all fifteen limits are met: a cold build of 16.6 s
+against 300, a warm start of 0.10 s against 5, a 659 MB cache against 1 GB, and
+typing at a median of 0.83 ms against 10. Full results and the reasoning behind
+the query classes are in
+[docs/design/2026-08-31-m7-benchmark-report.md](docs/design/2026-08-31-m7-benchmark-report.md).
+
 The search tests check every answer against one computed directly: suffix order
 against Python's own sort of the suffixes, ranges against a scan for the
 pattern, and block top-k against reading the range entry by entry.
@@ -243,6 +259,7 @@ autocomplete/       production package
   cli.py            the interactive completion loop
   cache.py          storing and validating a built index
   reference.py      slow brute-force engine used to define correctness
+benchmarks/         the performance harness and its gates
 docs/design/        design review and decision records
 prototypes/         throwaway benchmark scripts from the design review;
                     evidence only, never imported by the package
