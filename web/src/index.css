@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+/* The four accents are the product's own: a recognisable four-colour family,
+   not another product's brand values. Everything else is neutral so the
+   sentences are what the eye lands on. */
+@theme {
+  --color-accent-blue: #2563eb;
+  --color-accent-red: #dc2626;
+  --color-accent-amber: #f59e0b;
+  --color-accent-green: #16a34a;
+
+  --color-ink: #1a1c1f;
+  --color-ink-soft: #5b6169;
+  --color-ink-faint: #868d96;
+  --color-page: #ffffff;
+  --color-page-sunken: #f6f7f9;
+  --color-hairline: #e3e6ea;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background-color: var(--color-page);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Focus must always be visible, and never only as a colour change. */
+:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* The field is a search input for its semantics; its native clear affordance is
+   hidden because the form supplies its own, which is labelled and matches the
+   command line's reset. */
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
