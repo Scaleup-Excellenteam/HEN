@@ -1,8 +1,9 @@
 # Autocomplete configuration.
 #
 # Every key is optional; the value shown is the default. Relative paths are
-# resolved against the directory holding this file, so the program behaves the
-# same regardless of the working directory.
+# resolved against the directory holding this file, including the defaults for
+# keys you leave out, so the program behaves the same regardless of the working
+# directory.
 
 # Directory tree containing the corpus .txt files (the extracted Archive.zip).
 corpus_root: ../ArchiveFiles

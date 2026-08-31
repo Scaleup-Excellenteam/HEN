@@ -31,9 +31,80 @@ def test_shipped_config_file_loads():
     assert config.validation_level in VALIDATION_LEVELS
 
 
-def test_empty_file_yields_all_defaults(tmp_path):
+def test_empty_file_yields_defaults_anchored_to_the_file(tmp_path):
     path = write_config(tmp_path, "")
-    assert Config.from_yaml(path) == Config()
+    config = Config.from_yaml(path)
+    assert config.corpus_root == tmp_path / "corpus"
+    assert config.cache_dir == tmp_path / ".cache"
+    assert config.num_results == Config().num_results
+    assert config.use_mmap == Config().use_mmap
+    assert config.validation_level == Config().validation_level
+
+
+def test_partial_file_omitting_both_paths_still_anchors_them(tmp_path):
+    path = write_config(tmp_path, "num_results: 3\n")
+    config = Config.from_yaml(path)
+    assert config.num_results == 3
+    assert config.corpus_root == tmp_path / "corpus"
+    assert config.cache_dir == tmp_path / ".cache"
+
+
+def test_supplying_only_corpus_root_anchors_the_cache_default(tmp_path):
+    path = write_config(tmp_path, "corpus_root: data/corpus\n")
+    config = Config.from_yaml(path)
+    assert config.corpus_root == tmp_path / "data/corpus"
+    assert config.cache_dir == tmp_path / ".cache"
+
+
+def test_supplying_only_cache_dir_anchors_the_corpus_default(tmp_path):
+    path = write_config(tmp_path, "cache_dir: build/index\n")
+    config = Config.from_yaml(path)
+    assert config.corpus_root == tmp_path / "corpus"
+    assert config.cache_dir == tmp_path / "build/index"
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "",
+        "num_results: 3\n",
+        "corpus_root: data/corpus\n",
+        "cache_dir: build/index\n",
+        "corpus_root: data/corpus\ncache_dir: build/index\n",
+    ],
+)
+def test_paths_do_not_depend_on_the_working_directory(tmp_path, monkeypatch, contents):
+    """The same file must describe the same directories from anywhere."""
+    config_dir = tmp_path / "project"
+    config_dir.mkdir()
+    path = write_config(config_dir, contents)
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    monkeypatch.chdir(tmp_path)
+    from_one = Config.from_yaml(path)
+    monkeypatch.chdir(elsewhere)
+    from_another = Config.from_yaml(path)
+
+    assert from_one == from_another
+    assert from_one.corpus_root.is_absolute()
+    assert from_one.cache_dir.is_absolute()
+    assert from_one.corpus_root.is_relative_to(config_dir)
+    assert from_one.cache_dir.is_relative_to(config_dir)
+
+
+def test_direct_construction_keeps_defaults_relative():
+    """Only loading anchors paths; constructing a Config does not guess a root."""
+    config = Config()
+    assert config.corpus_root == Path("corpus")
+    assert config.cache_dir == Path(".cache")
+
+
+def test_from_mapping_without_a_base_dir_leaves_paths_relative():
+    config = Config.from_mapping({})
+    assert config.corpus_root == Path("corpus")
+    assert config.cache_dir == Path(".cache")
 
 
 def test_values_override_defaults(tmp_path):

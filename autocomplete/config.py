@@ -23,6 +23,9 @@ DEFAULT_CONFIG_FILENAME = "config.yaml"
 #: measured cost of "content" on the real corpus is ~0.3 s, so it is the default.
 VALIDATION_LEVELS = ("structural", "content", "full")
 
+#: Settings holding filesystem paths, anchored to the config file when loading.
+_PATH_KEYS = ("corpus_root", "cache_dir")
+
 
 class ConfigError(ValueError):
     """Raised when a configuration file or value is invalid."""
@@ -31,6 +34,10 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class Config:
     """Validated, immutable project configuration.
+
+    The defaults below are relative paths. Loading through :meth:`from_yaml`
+    anchors them to the config file's directory; constructing a ``Config``
+    directly leaves them relative to the working directory.
 
     Attributes:
         corpus_root: Directory tree holding the corpus ``.txt`` files.
@@ -71,8 +78,10 @@ class Config:
     ) -> "Config":
         """Build a config from a mapping, filling in defaults.
 
-        Relative paths are resolved against ``base_dir`` when given, so that a
-        config file means the same thing regardless of the working directory.
+        When ``base_dir`` is given, every relative path setting is resolved
+        against it, whether the mapping supplied the value or the default was
+        used. That is what makes a config file mean the same thing regardless of
+        the working directory. With no ``base_dir`` the paths are left relative.
         """
         known = {f.name for f in fields(cls)}
         unknown = sorted(set(data) - known)
@@ -83,16 +92,21 @@ class Config:
             )
 
         values: dict[str, Any] = dict(data)
-        for key in ("corpus_root", "cache_dir"):
-            if key in values:
-                values[key] = _resolve_path(values[key], key, base_dir)
+        defaults = {f.name: f.default for f in fields(cls)}
+        for key in _PATH_KEYS:
+            # Anchor omitted keys too: a default path is as much a config-relative
+            # path as a written one, and leaving it to be read against the
+            # process working directory would make an empty config file mean
+            # different things depending on where the program was started.
+            values[key] = _resolve_path(values.get(key, defaults[key]), key, base_dir)
         return cls(**values)
 
     @classmethod
     def from_yaml(cls, path: Path | str) -> "Config":
         """Load configuration from a YAML file.
 
-        An empty file is treated as "all defaults".
+        An empty file is treated as "all defaults". Path settings, including
+        defaulted ones, are anchored to the directory holding ``path``.
         """
         path = Path(path)
         try:

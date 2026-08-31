@@ -32,9 +32,9 @@ pytest                     # run the test suite
 ```
 
 Settings live in `config.yaml`; every key is optional and documented in that
-file. Relative paths there resolve against the file's own directory, so the
-program behaves the same from any working directory. Point `corpus_root` at the
-extracted `Archive.zip` tree.
+file. Relative paths there resolve against the file's own directory, and so do
+the defaults for keys you omit, so the program behaves the same from any working
+directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 
 ## Current status
 
