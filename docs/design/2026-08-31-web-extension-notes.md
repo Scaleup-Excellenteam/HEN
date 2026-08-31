@@ -68,8 +68,7 @@ about which part is unavailable.
 *Search*: `idle`, `searching`, `results`, `empty`, `unavailable`, `offline`,
 `error`.
 
-Searching happens as you type, debounced by 180 ms, and immediately on Enter or
-the button. Each request carries a sequence number and a reply is ignored unless
+Searching happens as you type, debounced by 180 ms, and immediately on Enter. Each request carries a sequence number and a reply is ignored unless
 it belongs to the newest one, so a slow answer to an earlier query can never
 replace a later one; the previous request is also aborted when a new one starts.
 An empty query is answered without a request.
@@ -143,13 +142,17 @@ The command line remains the byte-faithful view.
   duplicates, empty and invalid input, the index unavailable, that the index is
   one shared object across many requests, and that CORS and the accepted
   parameters are limited.
-- 28 frontend tests: rendering, both ways of searching, loading, one and five
-  results, nothing found, every failure state, clearing, keyboard movement,
-  debouncing, a stale answer being rejected, and the accessibility behaviour.
-- Checked in a browser at 1440x900 and 390x844: the first view, results,
-  nothing found, the service stopped, keyboard-only movement with focus visible,
-  and long sentences with deeply nested paths, which wrap rather than overflow.
-  Removed a redundant second logo that the wide view had been showing.
+- 33 frontend tests: rendering, searching, loading, one and five results,
+  nothing found, every failure state, clearing, keyboard movement, debouncing, a
+  stale answer being rejected, the accessibility behaviour, and five that hold
+  the interface to the removals listed above.
+- Checked in a browser at 1440x900 and 400x860: the first view, results,
+  nothing found, the service stopped, keyboard-only movement with focus visible
+  on both the field and a row, accepting a suggestion, and long sentences with
+  deeply nested paths, which wrap on a narrow screen and truncate with the score
+  column intact. Two things were fixed by looking rather than by testing: a
+  redundant second logo in the wide view, and the field's text not sharing a
+  left rail with the sentences.
 
 ## Effect on the existing project
 
