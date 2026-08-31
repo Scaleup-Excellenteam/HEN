@@ -30,12 +30,12 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-import numpy as np
-
 from . import corpus
 from .config import VALIDATION_LEVELS, Config
+from .data import TIE_BREAK_POLICY
+from .index import ARTIFACT_FILES, SearchIndex
 from .normalize import DEFAULT_PUNCTUATION_POLICY
-from .records import ARTIFACT_FILES, RecordStore
+from .topk import DEFAULT_BLOCK_SIZE
 
 __all__ = [
     "CacheError",
@@ -50,7 +50,7 @@ __all__ = [
 
 #: Bumped whenever the on-disk layout or a decision baked into it changes, so an
 #: older cache is rejected instead of misread.
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 POINTER_FILE = "CURRENT"
 MANIFEST_FILE = "manifest.json"
@@ -73,10 +73,12 @@ class CacheMiss(CacheError):
     """
 
 
-def save(store: RecordStore, cache_dir: Path | str, corpus_hash: str) -> Path:
-    """Write ``store`` as a new generation and make it the current one.
+def save(index: SearchIndex, cache_dir: Path | str, corpus_hash: str) -> Path:
+    """Write ``index`` as a new generation and make it the current one.
 
-    Returns the generation directory.
+    Every artifact is written into a fresh directory, so an index that is
+    already published is never modified in place. Returns the generation
+    directory.
     """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -85,8 +87,8 @@ def save(store: RecordStore, cache_dir: Path | str, corpus_hash: str) -> Path:
     generation_dir = cache_dir / generation
     generation_dir.mkdir()
 
-    store.write_to(generation_dir)
-    manifest = _build_manifest(store, corpus_hash, generation_dir)
+    index.write_to(generation_dir)
+    manifest = _build_manifest(index, corpus_hash, generation_dir)
     (generation_dir / MANIFEST_FILE).write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -103,7 +105,9 @@ def load(
     corpus_hash: str | None = None,
     level: str = "content",
     use_mmap: bool = True,
-) -> RecordStore:
+    summary_width: int,
+    block_size: int = DEFAULT_BLOCK_SIZE,
+) -> SearchIndex:
     """Read the current cache, refusing anything that cannot be trusted.
 
     Args:
@@ -114,6 +118,9 @@ def load(
             array shapes; ``content`` also compares the corpus fingerprint;
             ``full`` also re-hashes every stored file, for use after a crash.
         use_mmap: Leave the artifacts on disk and page them in on demand.
+        summary_width: How many results the caller intends to ask for. A cache
+            summarizing fewer cannot answer them, so it is rejected.
+        block_size: Suffix-array entries per summary row.
 
     Raises:
         CacheMiss: if there is no cache, or it is stale, damaged or foreign.
@@ -132,12 +139,17 @@ def load(
             f"cache was written by format version {manifest.get('format_version')!r}, "
             f"this build expects {FORMAT_VERSION}"
         )
-    if manifest.get("punctuation_policy") != DEFAULT_PUNCTUATION_POLICY.value:
-        raise CacheMiss(
-            "cache was built with punctuation policy "
-            f"{manifest.get('punctuation_policy')!r}, now using "
-            f"{DEFAULT_PUNCTUATION_POLICY.value!r}"
-        )
+    for setting, expected in (
+        ("punctuation_policy", DEFAULT_PUNCTUATION_POLICY.value),
+        ("tie_break", TIE_BREAK_POLICY),
+        ("summary_width", summary_width),
+        ("block_size", block_size),
+    ):
+        if manifest.get(setting) != expected:
+            raise CacheMiss(
+                f"cache was built with {setting} {manifest.get(setting)!r}, "
+                f"now using {expected!r}"
+            )
     if level in ("content", "full") and manifest.get("corpus_hash") != corpus_hash:
         raise CacheMiss("the corpus has changed since the cache was built")
 
@@ -160,25 +172,31 @@ def load(
             raise CacheMiss(f"cached file {filename} does not match its checksum")
 
     try:
-        store = RecordStore.read_from(generation_dir, use_mmap=use_mmap)
-        _check_arrays(store, manifest)
-        store.check_structure()
+        index = SearchIndex.read_from(
+            generation_dir,
+            summary_width=summary_width,
+            block_size=block_size,
+            use_mmap=use_mmap,
+        )
+        _check_arrays(index, manifest)
+        index.check_structure()
     except CacheMiss:
         raise
-    except Exception as exc:  # unreadable arrays, bad JSON, truncated blobs
+    except Exception as exc:  # unreadable arrays, truncated blobs, mismatched shapes
         raise CacheMiss(f"cached index could not be read: {exc}") from exc
 
-    if len(store) != manifest.get("record_count"):
+    if len(index) != manifest.get("record_count"):
         raise CacheMiss("cached index holds a different number of records")
-    return store
+    return index
 
 
 def build_or_load(
     config: Config,
     *,
     force_rebuild: bool = False,
+    block_size: int = DEFAULT_BLOCK_SIZE,
     log: Logger | None = None,
-) -> RecordStore:
+) -> SearchIndex:
     """Return a ready index, reusing the cache when it is still valid."""
     announce = log or (lambda message: None)
 
@@ -188,26 +206,33 @@ def build_or_load(
 
     if not force_rebuild:
         try:
-            store = load(
+            index = load(
                 config.cache_dir,
                 corpus_hash=corpus_hash,
                 level=config.validation_level,
                 use_mmap=config.use_mmap,
+                summary_width=config.num_results,
+                block_size=block_size,
             )
         except CacheMiss as reason:
             announce(f"building the index ({reason})")
         else:
-            announce(f"loaded {len(store)} records from cache")
-            return store
+            announce(f"loaded {len(index)} records from cache")
+            return index
     else:
         announce("building the index (rebuild requested)")
 
     if corpus_hash is None:
         corpus_hash = corpus.fingerprint(config.corpus_root)
-    store = RecordStore.build(config.corpus_root)
-    save(store, config.cache_dir, corpus_hash)
-    announce(f"indexed {len(store)} records from {len(store.paths)} files")
-    return store
+    index = SearchIndex.build(
+        config.corpus_root,
+        summary_width=config.num_results,
+        block_size=block_size,
+        log=announce,
+    )
+    generation = save(index, config.cache_dir, corpus_hash)
+    announce(f"wrote generation {generation.name}")
+    return index
 
 
 def _current_generation(cache_dir: Path) -> Path:
@@ -242,21 +267,11 @@ def _read_manifest(generation_dir: Path) -> dict:
     return manifest
 
 
-def _build_manifest(store: RecordStore, corpus_hash: str, generation_dir: Path) -> dict:
+def _build_manifest(index: SearchIndex, corpus_hash: str, generation_dir: Path) -> dict:
     return {
         "format_version": FORMAT_VERSION,
         "corpus_hash": corpus_hash,
-        "punctuation_policy": DEFAULT_PUNCTUATION_POLICY.value,
-        "record_count": len(store),
-        "file_count": len(store.paths),
-        "max_record_length": store.max_record_length,
-        "arrays": {
-            name: {
-                "dtype": str(getattr(store, name).dtype),
-                "shape": list(getattr(store, name).shape),
-            }
-            for name in ("starts", "orig_starts", "file_id", "line_no")
-        },
+        **index.describe(),
         "artifacts": {
             filename: {
                 "bytes": (generation_dir / filename).stat().st_size,
@@ -267,21 +282,22 @@ def _build_manifest(store: RecordStore, corpus_hash: str, generation_dir: Path) 
     }
 
 
-def _check_arrays(store: RecordStore, manifest: dict) -> None:
+def _check_arrays(index: SearchIndex, manifest: dict) -> None:
     described = manifest.get("arrays")
     if not isinstance(described, dict):
         raise CacheMiss("manifest does not describe the index arrays")
+    actual = index.describe()["arrays"]
     for name, expected in described.items():
-        array = getattr(store, name, None)
-        if not isinstance(array, np.ndarray):
+        if name not in actual:
             raise CacheMiss(f"cached index is missing the {name} array")
-        if str(array.dtype) != expected.get("dtype"):
+        if actual[name]["dtype"] != expected.get("dtype"):
             raise CacheMiss(
-                f"{name} has type {array.dtype}, manifest says {expected.get('dtype')}"
+                f"{name} has type {actual[name]['dtype']}, manifest says "
+                f"{expected.get('dtype')}"
             )
-        if list(array.shape) != list(expected.get("shape", [])):
+        if actual[name]["shape"] != list(expected.get("shape", [])):
             raise CacheMiss(
-                f"{name} has shape {list(array.shape)}, manifest says "
+                f"{name} has shape {actual[name]['shape']}, manifest says "
                 f"{expected.get('shape')}"
             )
 

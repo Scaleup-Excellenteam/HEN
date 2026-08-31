@@ -12,9 +12,10 @@ import time
 from pathlib import Path
 
 from autocomplete import __version__
-from autocomplete.cache import build_or_load
+from autocomplete.cache import POINTER_FILE, build_or_load
 from autocomplete.config import DEFAULT_CONFIG_FILENAME, Config, ConfigError
 from autocomplete.corpus import CorpusNotFoundError
+from autocomplete.suffix_index import SuffixIndexError
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -73,26 +74,50 @@ def main(argv: list[str] | None = None) -> int:
 
     started = time.perf_counter()
     try:
-        store = build_or_load(
+        index = build_or_load(
             config,
             force_rebuild=args.rebuild,
             log=lambda message: print(f"  {message}"),
         )
-    except CorpusNotFoundError as exc:
+    except (CorpusNotFoundError, SuffixIndexError) as exc:
         print(f"error: {exc}")
         return 2
     elapsed = time.perf_counter() - started
 
+    records = index.records
+    print()
+    print(f"sentences        : {len(records):,} from {len(records.paths):,} files")
+    print(f"longest sentence : {records.max_record_length} characters")
+    print(f"searchable text  : {len(records.norm_blob) / 1e6:.1f} MB")
     print(
-        f"  ready in {elapsed:.1f}s: {len(store):,} sentences from "
-        f"{len(store.paths):,} files, longest {store.max_record_length} characters"
+        f"suffix array     : {len(index.suffix):,} positions "
+        f"({index.suffix.positions.dtype})"
     )
+    print(
+        f"block summaries  : {index.blocks.summaries.shape[0]:,} blocks of "
+        f"{index.block_size}, {index.summary_width} records each"
+    )
+    print(f"cache directory  : {_describe_cache(config.cache_dir)}")
+    print(f"ready in         : {elapsed:.1f}s")
 
     if not (args.build or args.rebuild):
         print()
-        print("The search index and the interactive completion loop are not")
-        print("implemented yet (milestones M4-M6); see README.md for status.")
+        print("Completions are not available yet: the fuzzy search that fills in")
+        print("results for a mistyped query arrives in M5, and the interactive")
+        print("loop in M6. See README.md for status.")
     return 0
+
+
+def _describe_cache(cache_dir: Path) -> str:
+    """Report the current generation and how much room it takes."""
+    try:
+        generation = (cache_dir / POINTER_FILE).read_text(encoding="utf-8").strip()
+        size = sum(
+            path.stat().st_size for path in (cache_dir / generation).iterdir()
+        )
+    except OSError:
+        return str(cache_dir)
+    return f"{generation} ({size / 1e6:.0f} MB)"
 
 
 if __name__ == "__main__":

@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["AutoCompleteData", "tie_break_key"]
+__all__ = ["TIE_BREAK_POLICY", "AutoCompleteData", "tie_break_key"]
+
+#: Names the ordering :func:`tie_break_key` implements. Stored alongside a built
+#: index, because records are laid out in this order: an index built under a
+#: different answer to D7' has to be rebuilt, not reused.
+TIE_BREAK_POLICY = "original-sentence-codepoint"
 
 
 def tie_break_key(

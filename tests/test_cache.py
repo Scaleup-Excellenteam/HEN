@@ -17,7 +17,14 @@ from autocomplete.cache import (
     save,
 )
 from autocomplete.config import Config
-from autocomplete.records import RecordStore
+from autocomplete.index import SearchIndex
+
+WIDTH = 5
+
+
+def build_index(root, width: int = WIDTH) -> SearchIndex:
+    return SearchIndex.build(root, summary_width=width)
+
 
 CORPUS_FILES = {
     "a.txt": b"Alpha line one.\nAlpha line two.\n",
@@ -47,7 +54,7 @@ def cache_dir(tmp_path):
 def saved(corpus_root, cache_dir):
     """A cache holding the corpus, plus its fingerprint."""
     digest = corpus.fingerprint(corpus_root)
-    generation = save(RecordStore.build(corpus_root), cache_dir, digest)
+    generation = save(build_index(corpus_root), cache_dir, digest)
     return generation, digest
 
 
@@ -58,10 +65,10 @@ def config_for(corpus_root, cache_dir, **overrides) -> Config:
 class TestSaveAndLoad:
     def test_round_trip(self, saved, cache_dir, corpus_root):
         _, digest = saved
-        store = load(cache_dir, corpus_hash=digest, level="full")
-        original = RecordStore.build(corpus_root)
-        assert len(store) == len(original)
-        assert [store.sentence(i) for i in range(len(store))] == [
+        index = load(cache_dir, corpus_hash=digest, level="full", summary_width=WIDTH)
+        original = build_index(corpus_root).records
+        assert len(index) == len(original)
+        assert [index.records.sentence(i) for i in range(len(index))] == [
             original.sentence(i) for i in range(len(original))
         ]
 
@@ -86,33 +93,130 @@ class TestSaveAndLoad:
     @pytest.mark.parametrize("use_mmap", [True, False])
     def test_loads_either_mapped_or_read(self, saved, cache_dir, use_mmap):
         _, digest = saved
-        store = load(cache_dir, corpus_hash=digest, use_mmap=use_mmap)
-        assert store.sentence(0) == "Alpha line one."
+        index = load(cache_dir, corpus_hash=digest, use_mmap=use_mmap, summary_width=WIDTH)
+        assert index.records.sentence(0) == "Alpha line one."
 
     def test_empty_corpus_round_trips(self, tmp_path):
         source = build_tree(tmp_path / "corpus", {"a.txt": b"\n   \n"})
         cache = tmp_path / "cache"
         digest = corpus.fingerprint(source)
-        save(RecordStore.build(source), cache, digest)
-        assert len(load(cache, corpus_hash=digest, level="full")) == 0
+        save(build_index(source), cache, digest)
+        assert len(load(cache, corpus_hash=digest, level="full", summary_width=WIDTH)) == 0
+
+
+class TestSearchArtifacts:
+    """A generation must describe one index, never a mixture of two."""
+
+    def test_generation_holds_the_search_structures(self, saved):
+        generation, _ = saved
+        names = {path.name for path in generation.iterdir()}
+        assert "suffix_array.npy" in names
+        assert "block_summaries.npy" in names
+
+    def test_manifest_records_the_search_settings(self, saved):
+        generation, _ = saved
+        manifest = json.loads((generation / MANIFEST_FILE).read_text())
+        assert manifest["summary_width"] == WIDTH
+        assert manifest["block_size"] == 4096
+        assert manifest["tie_break"] == "original-sentence-codepoint"
+        assert manifest["arrays"]["suffix_array"]["dtype"] == "int32"
+        assert manifest["arrays"]["block_summaries"]["shape"][1] == WIDTH
+
+    def test_suffix_array_covers_the_normalized_blob(self, saved, cache_dir):
+        _, digest = saved
+        index = load(cache_dir, corpus_hash=digest, summary_width=WIDTH)
+        assert len(index.suffix) == len(index.records.norm_blob)
+
+    def test_a_cache_summarizing_fewer_results_is_rejected(self, corpus_root, cache_dir):
+        save(build_index(corpus_root, width=3), cache_dir, corpus.fingerprint(corpus_root))
+        with pytest.raises(CacheMiss, match="summary_width"):
+            load(cache_dir, level="structural", summary_width=5)
+
+    def test_a_cache_built_with_another_block_size_is_rejected(self, saved, cache_dir):
+        with pytest.raises(CacheMiss, match="block_size"):
+            load(cache_dir, level="structural", summary_width=WIDTH, block_size=1024)
+
+    def test_a_cache_built_under_another_tie_break_is_rejected(self, saved, cache_dir):
+        generation, _ = saved
+        manifest = json.loads((generation / MANIFEST_FILE).read_text())
+        manifest["tie_break"] = "normalized-sentence"
+        (generation / MANIFEST_FILE).write_text(json.dumps(manifest))
+        with pytest.raises(CacheMiss, match="tie_break"):
+            load(cache_dir, level="structural", summary_width=WIDTH)
+
+    def test_missing_suffix_array(self, saved, cache_dir):
+        generation, _ = saved
+        (generation / "suffix_array.npy").unlink()
+        with pytest.raises(CacheMiss, match="is missing"):
+            load(cache_dir, level="structural", summary_width=WIDTH)
+
+    def test_missing_block_summaries(self, saved, cache_dir):
+        generation, _ = saved
+        (generation / "block_summaries.npy").unlink()
+        with pytest.raises(CacheMiss, match="is missing"):
+            load(cache_dir, level="structural", summary_width=WIDTH)
+
+    @pytest.mark.parametrize("artifact", ["suffix_array.npy", "block_summaries.npy"])
+    def test_truncated_search_artifact(self, saved, cache_dir, artifact):
+        generation, _ = saved
+        path = generation / artifact
+        path.write_bytes(path.read_bytes()[:-8])
+        with pytest.raises(CacheMiss, match="bytes, manifest says"):
+            load(cache_dir, level="structural", summary_width=WIDTH)
+
+    def test_suffix_array_of_the_wrong_shape_is_caught(self, saved, cache_dir):
+        generation, _ = saved
+        manifest = json.loads((generation / MANIFEST_FILE).read_text())
+        manifest["arrays"]["suffix_array"]["shape"] = [7]
+        (generation / MANIFEST_FILE).write_text(json.dumps(manifest))
+        with pytest.raises(CacheMiss, match="suffix_array"):
+            load(cache_dir, level="structural", summary_width=WIDTH)
+
+    def test_suffix_array_of_the_wrong_dtype_is_caught(self, saved, cache_dir):
+        import numpy as np
+
+        generation, _ = saved
+        positions = np.load(generation / "suffix_array.npy")
+        np.save(generation / "suffix_array.npy", positions.astype(np.int64))
+        with pytest.raises(CacheMiss):
+            load(cache_dir, level="structural", summary_width=WIDTH)
+
+    def test_a_suffix_array_from_another_corpus_cannot_be_grafted_in(
+        self, saved, cache_dir, tmp_path
+    ):
+        """The suffix array is only meaningful for the blob it was built from,
+        so one sized for different text must be refused."""
+        import numpy as np
+
+        generation, digest = saved
+        other = build_tree(tmp_path / "other", {"a.txt": b"Totally different text.\n"})
+        foreign = build_index(other)
+        np.save(generation / "suffix_array.npy", foreign.suffix.positions)
+        with pytest.raises(CacheMiss):
+            load(cache_dir, corpus_hash=digest, summary_width=WIDTH)
 
 
 class TestValidationLevels:
     def test_content_level_notices_an_edited_corpus(self, saved, cache_dir, corpus_root):
         (corpus_root / "a.txt").write_bytes(b"Alpha line ONE.\nAlpha line two.\n")
         with pytest.raises(CacheMiss, match="corpus has changed"):
-            load(cache_dir, corpus_hash=corpus.fingerprint(corpus_root), level="content")
+            load(
+                cache_dir,
+                corpus_hash=corpus.fingerprint(corpus_root),
+                level="content",
+                summary_width=WIDTH,
+            )
 
     def test_structural_level_does_not_look_at_the_corpus(self, saved, cache_dir):
-        assert len(load(cache_dir, level="structural")) == 4
+        assert len(load(cache_dir, level="structural", summary_width=WIDTH)) == 4
 
     def test_content_level_requires_the_fingerprint(self, saved, cache_dir):
         with pytest.raises(ValueError, match="needs the corpus hash"):
-            load(cache_dir, level="content")
+            load(cache_dir, level="content", summary_width=WIDTH)
 
     def test_unknown_level_is_rejected(self, saved, cache_dir):
         with pytest.raises(ValueError, match="unknown validation level"):
-            load(cache_dir, corpus_hash="x", level="paranoid")
+            load(cache_dir, corpus_hash="x", level="paranoid", summary_width=WIDTH)
 
     def test_only_the_full_level_detects_silent_corruption(self, saved, cache_dir):
         """A flipped byte that keeps the file size is invisible to the cheaper
@@ -123,25 +227,25 @@ class TestValidationLevels:
         data[0] = data[0] ^ 0x20
         blob.write_bytes(bytes(data))
 
-        assert load(cache_dir, corpus_hash=digest, level="content")
+        assert load(cache_dir, corpus_hash=digest, level="content", summary_width=WIDTH)
         with pytest.raises(CacheMiss, match="does not match its checksum"):
-            load(cache_dir, corpus_hash=digest, level="full")
+            load(cache_dir, corpus_hash=digest, level="full", summary_width=WIDTH)
 
 
 class TestRejectsUnusableCaches:
     def test_no_cache_at_all(self, cache_dir):
         with pytest.raises(CacheMiss, match="no usable cache"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_missing_pointer(self, saved, cache_dir):
         (cache_dir / POINTER_FILE).unlink()
         with pytest.raises(CacheMiss, match="no usable cache"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_pointer_naming_a_missing_generation(self, saved, cache_dir):
         (cache_dir / POINTER_FILE).write_text("gen-does-not-exist\n")
         with pytest.raises(CacheMiss, match="missing generation"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     @pytest.mark.parametrize("hostile", ["../elsewhere", "/etc", "gen-a/../../x", ""])
     def test_pointer_cannot_address_anything_outside_the_cache(
@@ -149,19 +253,19 @@ class TestRejectsUnusableCaches:
     ):
         (cache_dir / POINTER_FILE).write_text(f"{hostile}\n")
         with pytest.raises(CacheMiss):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_missing_manifest(self, saved, cache_dir):
         generation, _ = saved
         (generation / MANIFEST_FILE).unlink()
         with pytest.raises(CacheMiss, match="no manifest"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_unreadable_manifest(self, saved, cache_dir):
         generation, _ = saved
         (generation / MANIFEST_FILE).write_text("{not json")
         with pytest.raises(CacheMiss, match="not valid JSON"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_manifest_from_a_different_format_version(self, saved, cache_dir):
         generation, _ = saved
@@ -169,28 +273,28 @@ class TestRejectsUnusableCaches:
         manifest["format_version"] = FORMAT_VERSION + 1
         (generation / MANIFEST_FILE).write_text(json.dumps(manifest))
         with pytest.raises(CacheMiss, match="format version"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_index_built_under_a_different_punctuation_policy(self, saved, cache_dir):
         generation, _ = saved
         manifest = json.loads((generation / MANIFEST_FILE).read_text())
         manifest["punctuation_policy"] = "space"
         (generation / MANIFEST_FILE).write_text(json.dumps(manifest))
-        with pytest.raises(CacheMiss, match="punctuation policy"):
-            load(cache_dir, level="structural")
+        with pytest.raises(CacheMiss, match="punctuation_policy"):
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_truncated_artifact(self, saved, cache_dir):
         generation, _ = saved
         blob = generation / "norm_blob.bin"
         blob.write_bytes(blob.read_bytes()[:-3])
         with pytest.raises(CacheMiss, match="bytes, manifest says"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_deleted_artifact(self, saved, cache_dir):
         generation, _ = saved
         (generation / "starts.npy").unlink()
         with pytest.raises(CacheMiss, match="is missing"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_manifest_describing_the_wrong_files(self, saved, cache_dir):
         generation, _ = saved
@@ -198,7 +302,7 @@ class TestRejectsUnusableCaches:
         del manifest["artifacts"]["line_no.npy"]
         (generation / MANIFEST_FILE).write_text(json.dumps(manifest))
         with pytest.raises(CacheMiss, match="expected set of files"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_array_of_the_wrong_shape(self, saved, cache_dir):
         generation, _ = saved
@@ -206,7 +310,7 @@ class TestRejectsUnusableCaches:
         manifest["arrays"]["line_no"]["shape"] = [999]
         (generation / MANIFEST_FILE).write_text(json.dumps(manifest))
         with pytest.raises(CacheMiss, match="shape"):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
 
 class TestInterruptedBuilds:
@@ -221,7 +325,7 @@ class TestInterruptedBuilds:
         (abandoned / "norm_blob.bin").write_bytes(b"truncated")
 
         # The pointer still names the good generation, so loading is unaffected.
-        assert len(load(cache_dir, corpus_hash=digest, level="full")) == 4
+        assert len(load(cache_dir, corpus_hash=digest, level="full", summary_width=WIDTH)) == 4
         assert (cache_dir / POINTER_FILE).read_text().strip() == generation.name
 
     def test_publishing_a_broken_generation_is_reported_not_silently_used(
@@ -231,7 +335,7 @@ class TestInterruptedBuilds:
         abandoned.mkdir()
         (cache_dir / POINTER_FILE).write_text(f"{abandoned.name}\n")
         with pytest.raises(CacheMiss):
-            load(cache_dir, level="structural")
+            load(cache_dir, level="structural", summary_width=WIDTH)
 
     def test_an_abandoned_generation_is_cleaned_up_by_the_next_build(
         self, saved, cache_dir, corpus_root
@@ -240,7 +344,7 @@ class TestInterruptedBuilds:
         abandoned.mkdir()
         (abandoned / "junk.bin").write_bytes(b"x")
 
-        save(RecordStore.build(corpus_root), cache_dir, corpus.fingerprint(corpus_root))
+        save(build_index(corpus_root), cache_dir, corpus.fingerprint(corpus_root))
         assert not abandoned.exists()
 
     def test_a_leftover_pointer_temp_file_is_cleaned_up(
@@ -249,28 +353,28 @@ class TestInterruptedBuilds:
         leftover = cache_dir / f"{POINTER_FILE}.tmp-999-abcdef"
         leftover.write_text("gen-something\n")
 
-        save(RecordStore.build(corpus_root), cache_dir, corpus.fingerprint(corpus_root))
+        save(build_index(corpus_root), cache_dir, corpus.fingerprint(corpus_root))
         assert not leftover.exists()
 
     def test_rebuilding_replaces_the_generation_and_keeps_one(
         self, saved, cache_dir, corpus_root
     ):
         first, digest = saved
-        second = save(RecordStore.build(corpus_root), cache_dir, digest)
+        second = save(build_index(corpus_root), cache_dir, digest)
 
         assert second != first
         assert not first.exists()
         generations = [p for p in cache_dir.iterdir() if p.is_dir()]
         assert generations == [second]
-        assert len(load(cache_dir, corpus_hash=digest, level="full")) == 4
+        assert len(load(cache_dir, corpus_hash=digest, level="full", summary_width=WIDTH)) == 4
 
     def test_two_builds_in_a_row_leave_a_loadable_cache(self, corpus_root, cache_dir):
         """Stands in for two builders racing: whichever publishes last wins, and
         the pointer always names a complete generation."""
         digest = corpus.fingerprint(corpus_root)
-        save(RecordStore.build(corpus_root), cache_dir, digest)
-        save(RecordStore.build(corpus_root), cache_dir, digest)
-        assert len(load(cache_dir, corpus_hash=digest, level="full")) == 4
+        save(build_index(corpus_root), cache_dir, digest)
+        save(build_index(corpus_root), cache_dir, digest)
+        assert len(load(cache_dir, corpus_hash=digest, level="full", summary_width=WIDTH)) == 4
 
 
 class TestBuildOrLoad:
