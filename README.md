@@ -42,15 +42,16 @@ directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 |---|---|---|
 | M0 | Package scaffold, configuration, fixtures, CI | done |
 | M1 | Normalization, scoring, repair generation and tiers | done |
-| M2 | Brute-force reference implementation, differential harness | next |
-| M3 | Corpus walking, record store, cache | planned |
+| M2 | Brute-force reference implementation, differential harness | done |
+| M3 | Corpus walking, record store, cache | next |
 | M4 | Suffix array, block summaries, exact search | planned |
 | M5 | Fuzzy tier walk, prefilter, `get_best_k_completions` | planned |
 | M6 | Interactive command line | planned |
 | M7 | Benchmarks against the performance gates | planned |
 
 `get_best_k_completions` is importable now and raises `NotImplementedError`
-until M5.
+until M5. There is no working autocomplete program yet: the corpus is not
+indexed and the interactive loop does not exist.
 
 ## How matching works
 
@@ -67,21 +68,48 @@ the corpus. Because a repair's score does not depend on which sentence it matche
 walking the tiers from the highest score down and stopping once five results are
 fixed yields the true global top five.
 
+## The reference engine
+
+`autocomplete/reference.py` is a second, deliberately slow implementation that
+defines what the fast engine must produce. For each corpus line it slides a
+window over the sentence and compares it against the query character by
+character, keeping the best score over every alignment.
+
+**It is test infrastructure, not the serving path.** Nothing in the product calls
+it, and `get_best_k_completions` does not use it: it is far too slow for the
+real corpus, which is the whole reason the indexed engine exists.
+
+Its value comes from being built on different reasoning. The production search
+will enumerate repaired forms of the query and look them up in a suffix array, so
+a reference written the same way would prove nothing. This one shares no matching
+logic and restates the penalty numbers from the assignment appendix rather than
+importing the production table, with a test asserting the two still agree. What
+they do share, deliberately, is the normalizer, the result record and the
+ordering policy, since those must be identical rather than merely equivalent.
+
 ## Testing
 
 ```bash
-pytest                       # everything
-pytest tests/test_scoring.py # one area
+pytest                            # everything, about two seconds
+pytest tests/test_reference.py    # the reference engine
+pytest tests/test_differential.py # the two rankers compared
+pytest tests/test_scoring.py      # the scoring table and repairs
 ```
 
-Two things are worth knowing about the suite. All thirteen scored examples
-printed in the assignment are reproduced as tests. And scoring is checked against
-a second, independently written implementation in
-`tests/support/alignment_reference.py`, which slides a window over the sentence
-instead of enumerating repairs and restates the penalty numbers from the
-appendix rather than importing them, so a mistake in the production table or in
-its repair generation cannot be mirrored there. The two agree on all 15,120
-query/sentence pairs over a small alphabet.
+All thirteen scored examples printed in the assignment are reproduced as tests,
+and the worked example session is checked end to end against the fixture corpus.
+
+`tests/test_differential.py` uses Hypothesis to generate small corpora and
+queries, then compares the reference engine against a test-only ranker built the
+way the production engine will think, asserting that complete result lists match
+field for field. Generated corpora vary file count, nesting, case, punctuation,
+tabs, spacing, blank lines and duplicate text; queries are drawn as exact
+substrings, substrings carrying one or two injected typos, random text, and input
+that normalizes away. Runs are derandomized, so CI sees the same examples every
+time; raise `max_examples` locally to explore further.
+
+Comparing two implementations cannot catch a fault in what they share, so the
+ordering policy has its own direct tests rather than relying on the comparison.
 
 ## Decisions awaiting confirmation
 
@@ -105,8 +133,10 @@ autocomplete/       production package
   config.py         YAML configuration loading and validation
   normalize.py      canonical text normalization
   scoring.py        scoring table, repair generation, score tiers
+  reference.py      slow brute-force engine used to define correctness
 docs/design/        design review and decision records
 prototypes/         throwaway benchmark scripts from the design review;
                     evidence only, never imported by the package
 tests/              test suite, including the fixture corpus
+  support/          test-only helpers, such as the enumeration ranker
 ```
