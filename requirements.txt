@@ -11,3 +11,8 @@
 PyYAML>=6.0,<7.0
 numpy>=1.26,<3.0
 pydivsufsort>=0.0.14,<0.1
+
+# Optional web extension. The command line and the Python API work without
+# these; they are only needed to serve the browser interface.
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0

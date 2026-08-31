@@ -22,3 +22,10 @@ benchmarks/results/
 
 # OS
 .DS_Store
+
+# Web extension
+node_modules/
+web/dist/
+web/coverage/
+web/.vite/
+*.local
