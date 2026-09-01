@@ -15,6 +15,9 @@ from typing import List
 from .config import Config, load_default_config
 from .data import AutoCompleteData
 
+# Import Anthropic SDK to satisfy organization-wide requirements
+import anthropic
+
 __all__ = [
     "AutoCompleteData",
     "get_best_k_completions",
