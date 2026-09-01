@@ -13,6 +13,7 @@ from autocomplete.cache import (
     POINTER_FILE,
     CacheMiss,
     build_or_load,
+    current_generation_name,
     load,
     save,
 )
@@ -375,6 +376,38 @@ class TestInterruptedBuilds:
         save(build_index(corpus_root), cache_dir, digest)
         save(build_index(corpus_root), cache_dir, digest)
         assert len(load(cache_dir, corpus_hash=digest, level="full", summary_width=WIDTH)) == 4
+
+
+class TestCurrentGenerationName:
+    """A cheap way to notice a new build without repeating full validation.
+
+    This is what a long-running reader polls: reading one small file, never
+    the index artifacts themselves, so watching for a new generation costs
+    nothing like a reload does.
+    """
+
+    def test_no_cache_at_all(self, cache_dir):
+        assert current_generation_name(cache_dir) is None
+
+    def test_names_the_generation_the_pointer_names(self, saved, cache_dir):
+        generation, _ = saved
+        assert current_generation_name(cache_dir) == generation.name
+
+    def test_changes_after_a_second_build_is_published(self, saved, cache_dir, corpus_root):
+        first = current_generation_name(cache_dir)
+        second = save(build_index(corpus_root), cache_dir, corpus.fingerprint(corpus_root))
+        assert current_generation_name(cache_dir) == second.name
+        assert current_generation_name(cache_dir) != first
+
+    def test_pointer_naming_a_missing_generation_is_reported_as_no_generation(
+        self, saved, cache_dir
+    ):
+        (cache_dir / POINTER_FILE).write_text("gen-does-not-exist\n")
+        assert current_generation_name(cache_dir) is None
+
+    def test_a_hostile_pointer_is_reported_as_no_generation(self, saved, cache_dir):
+        (cache_dir / POINTER_FILE).write_text("../elsewhere\n")
+        assert current_generation_name(cache_dir) is None
 
 
 class TestBuildOrLoad:

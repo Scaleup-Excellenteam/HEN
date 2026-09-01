@@ -22,6 +22,7 @@ def test_defaults_are_valid_without_a_file():
     assert config.num_results == 5
     assert config.use_mmap is True
     assert config.validation_level == "content"
+    assert config.refresh_interval == 5.0
 
 
 def test_shipped_config_file_loads():
@@ -39,6 +40,7 @@ def test_empty_file_yields_defaults_anchored_to_the_file(tmp_path):
     assert config.num_results == Config().num_results
     assert config.use_mmap == Config().use_mmap
     assert config.validation_level == Config().validation_level
+    assert config.refresh_interval == Config().refresh_interval
 
 
 def test_partial_file_omitting_both_paths_still_anchors_them(tmp_path):
@@ -180,6 +182,32 @@ def test_validation_level_must_be_known():
 def test_use_mmap_must_be_boolean(tmp_path):
     path = write_config(tmp_path, "use_mmap: sometimes\n")
     with pytest.raises(ConfigError, match="use_mmap"):
+        Config.from_yaml(path)
+
+
+def test_refresh_interval_can_be_set(tmp_path):
+    path = write_config(tmp_path, "refresh_interval: 30\n")
+    assert Config.from_yaml(path).refresh_interval == 30
+
+
+def test_refresh_interval_of_zero_disables_watching():
+    assert Config(refresh_interval=0).refresh_interval == 0
+
+
+@pytest.mark.parametrize("value", [-1, -0.5])
+def test_refresh_interval_must_not_be_negative(value):
+    with pytest.raises(ConfigError, match="refresh_interval"):
+        Config(refresh_interval=value)
+
+
+def test_refresh_interval_rejects_bool():
+    with pytest.raises(ConfigError, match="refresh_interval"):
+        Config(refresh_interval=True)  # type: ignore[arg-type]
+
+
+def test_refresh_interval_rejects_non_numeric(tmp_path):
+    path = write_config(tmp_path, "refresh_interval: soon\n")
+    with pytest.raises(ConfigError, match="refresh_interval"):
         Config.from_yaml(path)
 
 

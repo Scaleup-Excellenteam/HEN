@@ -44,6 +44,7 @@ __all__ = [
     "MANIFEST_FILE",
     "POINTER_FILE",
     "build_or_load",
+    "current_generation_name",
     "load",
     "save",
 ]
@@ -188,6 +189,20 @@ def load(
     if len(index) != manifest.get("record_count"):
         raise CacheMiss("cached index holds a different number of records")
     return index
+
+
+def current_generation_name(cache_dir: Path | str) -> str | None:
+    """The generation the pointer currently names, or ``None`` to trust none.
+
+    This reads one small file and never touches the index artifacts, so it is
+    cheap enough to poll on an interval: a long-running reader uses it to
+    notice that a new generation has been published, before paying for the
+    full validation :func:`load` performs to actually adopt it.
+    """
+    try:
+        return _current_generation(Path(cache_dir)).name
+    except CacheMiss:
+        return None
 
 
 def build_or_load(

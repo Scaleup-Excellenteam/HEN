@@ -6,9 +6,14 @@ against what the engine returns directly.
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
+from autocomplete import corpus
+from autocomplete.cache import build_or_load, save
 from autocomplete.config import Config
 from autocomplete.engine import find_completions
 from autocomplete.index import SearchIndex
@@ -64,6 +69,12 @@ def failed_client() -> TestClient:
     app.state.engine = EngineState(error="CorpusNotFoundError: no such directory")
     with TestClient(app) as running:
         yield running
+
+
+def wait_until_ready(state: EngineState, *, deadline: int = 100) -> None:
+    while state.status == "preparing" and deadline:
+        time.sleep(0.05)
+        deadline -= 1
 
 
 class TestHealth:
@@ -254,6 +265,124 @@ class TestIndexLifecycle:
         assert state.index is None and not state.ready
         state.index = object()
         assert state.ready
+
+
+class TestGenerationRefresh:
+    """The running server adopts a newer index generation without restarting.
+
+    An offline build writes a fresh generation and flips the cache pointer
+    (``autocomplete.cache``); a server already serving requests must pick that
+    up on its own. This is the zero-downtime hand-off: the filesystem is the
+    only thing offline and online sides share.
+    """
+
+    def test_refresh_adopts_a_newly_published_generation(self, tmp_path):
+        root = write_corpus(tmp_path / "corpus", {"a.txt": DEMO})
+        cache_dir = tmp_path / "cache"
+        first = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+        config = Config(corpus_root=root, cache_dir=cache_dir, num_results=5)
+
+        state = EngineState()
+        assert state.generation is None
+        state.refresh(config)
+        assert state.generation == first.name
+        first_index = state.index
+        assert first_index is not None
+
+        write_corpus(root, {"b.txt": b"A brand new sentence.\n"})
+        second = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+
+        state.refresh(config)
+        assert state.generation == second.name
+        assert state.index is not first_index
+        assert len(state.index) == len(first_index) + 1
+
+    def test_refresh_is_a_no_op_when_the_pointer_has_not_moved(self, tmp_path):
+        root = write_corpus(tmp_path / "corpus", {"a.txt": DEMO})
+        cache_dir = tmp_path / "cache"
+        save(SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root))
+        config = Config(corpus_root=root, cache_dir=cache_dir, num_results=5)
+
+        state = EngineState()
+        state.refresh(config)
+        adopted = state.index
+        state.refresh(config)
+        assert state.index is adopted
+
+    def test_a_generation_that_fails_validation_is_skipped_not_adopted(self, tmp_path):
+        """A build still being written, or one that never finished cleanly,
+        must never interrupt a service that is already running."""
+        root = write_corpus(tmp_path / "corpus", {"a.txt": DEMO})
+        cache_dir = tmp_path / "cache"
+        first = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+        config = Config(corpus_root=root, cache_dir=cache_dir, num_results=5)
+
+        state = EngineState()
+        state.refresh(config)
+        good_index = state.index
+
+        write_corpus(root, {"b.txt": b"A brand new sentence.\n"})
+        broken = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+        (broken / "suffix_array.npy").unlink()
+
+        state.refresh(config)  # must not raise
+        assert state.index is good_index
+        assert state.generation == first.name
+
+    def test_background_watch_adopts_a_new_generation_without_restarting(self, tmp_path):
+        """End to end: an offline build publishes a generation, and a server
+        already answering requests picks it up on its own, with no restart."""
+        root = write_corpus(tmp_path / "corpus", {"a.txt": DEMO})
+        config = Config(
+            corpus_root=root,
+            cache_dir=tmp_path / "cache",
+            num_results=5,
+            refresh_interval=0.02,
+        )
+        state = EngineState()
+        state.prepare(config)
+        wait_until_ready(state)
+        first_index = state.index
+
+        write_corpus(root, {"b.txt": b"A brand new sentence.\n"})
+        build_or_load(config, force_rebuild=True)  # the offline side, run "remotely"
+
+        deadline = 200
+        while state.index is first_index and deadline:
+            time.sleep(0.02)
+            deadline -= 1
+
+        assert state.index is not first_index
+        assert len(state.index) == len(first_index) + 1
+
+    def test_refresh_interval_of_zero_disables_background_watching(self, tmp_path):
+        root = write_corpus(tmp_path / "corpus", {"a.txt": DEMO})
+        config = Config(corpus_root=root, cache_dir=tmp_path / "cache", refresh_interval=0)
+        state = EngineState()
+        state.prepare(config)
+        wait_until_ready(state)
+        time.sleep(0.1)  # give a wrongly-started watcher a chance to appear
+        assert not any(t.name == "index-refresh" for t in threading.enumerate())
+
+    def test_health_reports_the_serving_generation(self, index):
+        state = EngineState(index=index, _generation="gen-abc123-deadbeef")
+        app = create_app(prepare=False)
+        app.state.engine = state
+        with TestClient(app) as client:
+            body = client.get("/api/health").json()
+        assert body["generation"] == "gen-abc123-deadbeef"
+
+    def test_health_reports_no_generation_before_one_is_adopted(self, client):
+        body = client.get("/api/health").json()
+        assert body["generation"] is None
 
 
 class TestBoundaries:
