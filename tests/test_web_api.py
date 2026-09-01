@@ -337,6 +337,84 @@ class TestGenerationRefresh:
         assert state.index is good_index
         assert state.generation == first.name
 
+    def test_a_generation_that_keeps_failing_is_not_retried_every_tick(
+        self, tmp_path, monkeypatch
+    ):
+        """A generation that fails validation for a permanent reason (wrong
+        format version, a corpus hash that no longer matches, ...) will never
+        pass on a later tick without a new generation being published. Retrying
+        the exact same rejected generation forever, at the polling cadence,
+        with no backoff, is pure waste."""
+        from autocomplete import cache as cache_module
+
+        root = write_corpus(tmp_path / "corpus", {"a.txt": DEMO})
+        cache_dir = tmp_path / "cache"
+        save(SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root))
+        config = Config(corpus_root=root, cache_dir=cache_dir, num_results=5)
+
+        state = EngineState()
+        state.refresh(config)  # adopt the first, good generation
+
+        write_corpus(root, {"b.txt": b"A brand new sentence.\n"})
+        broken = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+        (broken / "suffix_array.npy").unlink()
+
+        calls = 0
+        real_load_current = cache_module.load_current
+
+        def counting_load_current(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return real_load_current(*args, **kwargs)
+
+        monkeypatch.setattr(cache_module, "load_current", counting_load_current)
+
+        state.refresh(config)  # first sight of the broken generation: one attempt
+        state.refresh(config)  # same broken generation again: must not retry
+        state.refresh(config)  # and again: must not retry
+        assert calls == 1
+
+        write_corpus(root, {"c.txt": b"Yet another sentence.\n"})
+        good = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+
+        state.refresh(config)  # a genuinely new generation: worth trying again
+        assert calls == 2
+        assert state.generation == good.name
+
+    def test_reported_generation_always_names_what_was_actually_loaded(
+        self, tmp_path, monkeypatch
+    ):
+        """``current_generation_name`` (the cheap pre-check) and the real
+        validating load each read the ``CURRENT`` pointer separately. If a
+        newer generation is published in between those two reads, the
+        generation label must still describe what was actually loaded, never
+        what the pre-check happened to see first."""
+        from autocomplete import cache as cache_module
+
+        root = write_corpus(tmp_path / "corpus", {"a.txt": DEMO})
+        cache_dir = tmp_path / "cache"
+        real = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+        config = Config(corpus_root=root, cache_dir=cache_dir, num_results=5)
+
+        # Simulate the pre-check racing ahead of the real load: it reports a
+        # generation name that names nothing the real, atomic load would ever
+        # see - the real load must be the one whose answer wins.
+        monkeypatch.setattr(
+            cache_module, "current_generation_name", lambda cache_dir: "some-stale-name"
+        )
+
+        state = EngineState()
+        state.refresh(config)
+
+        assert state.generation == real.name
+        assert state.generation != "some-stale-name"
+
     def test_background_watch_adopts_a_new_generation_without_restarting(self, tmp_path):
         """End to end: an offline build publishes a generation, and a server
         already answering requests picks it up on its own, with no restart."""

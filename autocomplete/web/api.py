@@ -20,9 +20,15 @@ first index is ready, the same background thread polls that pointer every
 generation this process has not adopted, loads it and republishes ``state.index``
 in one attribute assignment, the same handover used at start-up. A request that
 is already in flight keeps the index it looked up; the next request sees the
-new one. A generation that fails validation, because a build is still being
-written or died mid-way, is skipped rather than adopted, so a bad or partial
-build can never interrupt a service that is already running.
+new one. The reported generation always names what was actually loaded:
+``load_current`` reads the pointer once and returns the index and its
+generation name together, so the two can never disagree even if another
+generation is published in between the cheap pointer check and the real load.
+A generation that fails validation, a stale format version, a corpus hash that
+no longer matches, a damaged file, is skipped rather than adopted, so a bad
+build can never interrupt a service that is already running; that same
+generation name is then not retried on later ticks, because every reason
+validation fails is permanent, until the pointer names something new.
 """
 
 from __future__ import annotations
@@ -118,6 +124,7 @@ class EngineState:
     _started: bool = False
     _lock: threading.Lock = None  # type: ignore[assignment]
     _generation: str | None = None
+    _failed_generation: str | None = None
 
     def __post_init__(self) -> None:
         self._lock = threading.Lock()
@@ -185,15 +192,20 @@ class EngineState:
     def refresh(self, config: Config) -> None:
         """Adopt a newer generation if the cache pointer has moved on.
 
-        A no-op when the pointer still names the generation already serving.
-        A generation that fails validation, mid-write or foreign, is left for
-        the next tick rather than raised: the index already serving requests
-        is always preferred over no index at all.
+        A no-op when the pointer still names the generation already serving,
+        or the generation that most recently failed validation: every reason
+        :func:`~autocomplete.cache.load_current` rejects a generation (wrong
+        format version, a corpus hash that no longer matches, a truncated
+        file, ...) is permanent, so a generation that failed once will fail
+        identically forever. Retrying it every tick, with no backoff, would
+        just repeat the same failing work indefinitely; it is only worth
+        trying again once the pointer names something new. The index already
+        serving requests is always preferred over no index at all.
         """
-        from ..cache import CacheMiss, current_generation_name, load
+        from ..cache import CacheMiss, current_generation_name, load_current
 
         latest = current_generation_name(config.cache_dir)
-        if latest is None or latest == self._generation:
+        if latest is None or latest in (self._generation, self._failed_generation):
             return
 
         corpus_hash = None
@@ -203,7 +215,7 @@ class EngineState:
             corpus_hash = corpus.fingerprint(config.corpus_root)
 
         try:
-            index = load(
+            index, generation = load_current(
                 config.cache_dir,
                 corpus_hash=corpus_hash,
                 level=config.validation_level,
@@ -212,11 +224,13 @@ class EngineState:
             )
         except CacheMiss as exc:
             logger.warning("generation %s is not usable yet: %s", latest, exc)
+            self._failed_generation = latest
             return
 
         self.index = index
-        self._generation = latest
-        logger.info("adopted generation %s: %d sentences", latest, len(index))
+        self._generation = generation
+        self._failed_generation = None
+        logger.info("adopted generation %s: %d sentences", generation, len(index))
 
     def require(self):
         """The prepared index, or an HTTP error explaining why there is none."""

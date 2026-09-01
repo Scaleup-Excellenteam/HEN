@@ -46,6 +46,7 @@ __all__ = [
     "build_or_load",
     "current_generation_name",
     "load",
+    "load_current",
     "save",
 ]
 
@@ -126,13 +127,71 @@ def load(
     Raises:
         CacheMiss: if there is no cache, or it is stale, damaged or foreign.
     """
+    _validate_load_args(corpus_hash, level)
+    cache_dir = Path(cache_dir)
+    generation_dir = _current_generation(cache_dir)
+    return _load_from(
+        generation_dir,
+        corpus_hash=corpus_hash,
+        level=level,
+        use_mmap=use_mmap,
+        summary_width=summary_width,
+        block_size=block_size,
+    )
+
+
+def load_current(
+    cache_dir: Path | str,
+    *,
+    corpus_hash: str | None = None,
+    level: str = "content",
+    use_mmap: bool = True,
+    summary_width: int,
+    block_size: int = DEFAULT_BLOCK_SIZE,
+) -> tuple[SearchIndex, str]:
+    """Like :func:`load`, but also return the generation name that was read.
+
+    ``load`` reads the ``CURRENT`` pointer internally and never reports which
+    generation it resolved to, so a caller that wants a label for what it
+    loaded has to read the pointer separately, and a new generation
+    published in between the two reads can make that label wrong for what
+    was actually loaded. This reads the pointer exactly once and returns the
+    generation name from that same read, so the label can never disagree
+    with the index.
+
+    Raises:
+        CacheMiss: if there is no cache, or it is stale, damaged or foreign.
+    """
+    _validate_load_args(corpus_hash, level)
+    cache_dir = Path(cache_dir)
+    generation_dir = _current_generation(cache_dir)
+    index = _load_from(
+        generation_dir,
+        corpus_hash=corpus_hash,
+        level=level,
+        use_mmap=use_mmap,
+        summary_width=summary_width,
+        block_size=block_size,
+    )
+    return index, generation_dir.name
+
+
+def _validate_load_args(corpus_hash: str | None, level: str) -> None:
     if level not in VALIDATION_LEVELS:
         raise ValueError(f"unknown validation level {level!r}")
     if level in ("content", "full") and corpus_hash is None:
         raise ValueError(f"the {level!r} validation level needs the corpus hash")
 
-    cache_dir = Path(cache_dir)
-    generation_dir = _current_generation(cache_dir)
+
+def _load_from(
+    generation_dir: Path,
+    *,
+    corpus_hash: str | None,
+    level: str,
+    use_mmap: bool,
+    summary_width: int,
+    block_size: int,
+) -> SearchIndex:
     manifest = _read_manifest(generation_dir)
 
     if manifest.get("format_version") != FORMAT_VERSION:
