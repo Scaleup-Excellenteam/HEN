@@ -16,6 +16,15 @@ cd "$ROOT"
 SKIP_INSTALL=0
 ARGS=()
 
+# The project's own interpreter when there is one, so the script works against
+# the environment run.sh and the README set up rather than whatever python3
+# happens to be first on PATH.
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+    PYTHON="$ROOT/.venv/bin/python"
+else
+    PYTHON="python3"
+fi
+
 for arg in "$@"; do
     case "$arg" in
         --skip-install)
@@ -29,8 +38,11 @@ done
 
 if [[ "$SKIP_INSTALL" -eq 0 ]]; then
     echo "Installing test dependencies..."
-    python3 -m pip install -q -r requirements-dev.txt
+    "$PYTHON" -m pip install -q -r requirements-dev.txt
 fi
 
 echo "Running pytest..."
-python3 -m pytest "${ARGS[@]}"
+# ${ARGS[@]+...} rather than a bare "${ARGS[@]}": under `set -u`, bash 3.2 —
+# which is what macOS ships — treats an empty array as unset and aborts, so
+# running this with no arguments at all would fail before reaching pytest.
+"$PYTHON" -m pytest ${ARGS[@]+"${ARGS[@]}"}
