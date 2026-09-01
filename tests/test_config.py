@@ -204,3 +204,42 @@ def test_non_mapping_document_is_reported(tmp_path):
 def test_missing_file_is_reported(tmp_path):
     with pytest.raises(ConfigError, match="cannot read config file"):
         Config.from_yaml(tmp_path / "absent.yaml")
+
+
+class TestConfigPathOverride:
+    """``HEN_CONFIG`` exists so a throwaway corpus and cache can be served
+    without touching the index the machine has already prepared."""
+
+    def test_the_project_file_is_used_when_it_is_unset(self, monkeypatch):
+        from autocomplete.config import CONFIG_PATH_VARIABLE, default_config_path
+
+        monkeypatch.delenv(CONFIG_PATH_VARIABLE, raising=False)
+        assert default_config_path().name == "config.yaml"
+        assert default_config_path().parent.name == "HEN"
+
+    def test_it_points_somewhere_else_when_set(self, monkeypatch, tmp_path):
+        from autocomplete.config import CONFIG_PATH_VARIABLE, default_config_path
+
+        elsewhere = tmp_path / "demo" / "config.yaml"
+        elsewhere.parent.mkdir()
+        elsewhere.write_text("num_results: 5\n", encoding="utf-8")
+        monkeypatch.setenv(CONFIG_PATH_VARIABLE, str(elsewhere))
+        assert default_config_path() == elsewhere.resolve()
+
+    def test_an_empty_value_is_ignored(self, monkeypatch):
+        from autocomplete.config import CONFIG_PATH_VARIABLE, default_config_path
+
+        monkeypatch.setenv(CONFIG_PATH_VARIABLE, "   ")
+        assert default_config_path().name == "config.yaml"
+
+    def test_the_override_is_actually_loaded(self, monkeypatch, tmp_path):
+        from autocomplete.config import CONFIG_PATH_VARIABLE, load_default_config
+
+        elsewhere = tmp_path / "config.yaml"
+        elsewhere.write_text(
+            f"corpus_root: {tmp_path / 'corpus'}\ncache_dir: {tmp_path / 'cache'}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(CONFIG_PATH_VARIABLE, str(elsewhere))
+        loaded = load_default_config()
+        assert loaded.cache_dir == tmp_path / "cache"

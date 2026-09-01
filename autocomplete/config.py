@@ -19,12 +19,19 @@ __all__ = [
     "Config",
     "ConfigError",
     "VALIDATION_LEVELS",
+    "CONFIG_PATH_VARIABLE",
     "DEFAULT_CONFIG_FILENAME",
     "default_config_path",
     "load_default_config",
 ]
 
 DEFAULT_CONFIG_FILENAME = "config.yaml"
+
+#: Names a different configuration file to load. Its purpose is to make it
+#: possible to run the whole program against a throwaway corpus and cache —
+#: to watch a first build happen, for instance — without touching the index
+#: the machine has already prepared. Unset, everything behaves as before.
+CONFIG_PATH_VARIABLE = "HEN_CONFIG"
 
 #: Cache validation strength on load, weakest first. See the ADR (ss9.2): the
 #: measured cost of "content" on the real corpus is ~0.3 s, so it is the default.
@@ -136,7 +143,15 @@ class Config:
 
 
 def default_config_path() -> Path:
-    """The config file shipped beside the package, next to ``main.py``."""
+    """Which configuration file to load.
+
+    ``HEN_CONFIG`` overrides it when set, so a temporary corpus and cache can be
+    served without editing, moving or discarding the project's own. Otherwise it
+    is the file shipped beside the package, next to ``main.py``.
+    """
+    override = os.environ.get(CONFIG_PATH_VARIABLE, "").strip()
+    if override:
+        return Path(os.path.expandvars(Path(override).expanduser())).resolve()
     return Path(__file__).resolve().parent.parent / DEFAULT_CONFIG_FILENAME
 
 

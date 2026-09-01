@@ -29,6 +29,17 @@ export default function App() {
   const preparing =
     build.kind === "watching" &&
     (build.status.state === "preparing" || build.status.state === "failed");
+
+  // The page can now be open before the server is ready, and can watch a failed
+  // preparation being retried, so the health check may be holding an answer
+  // that has since stopped being true. When preparation reports readiness, ask
+  // again: without this the page would say the system is ready and that the
+  // index could not be prepared, at the same time.
+  const buildReady = build.kind === "watching" && build.status.state === "ready";
+  const healthStale = health.kind === "offline" || health.kind === "failed";
+  useEffect(() => {
+    if (buildReady && healthStale) recheck();
+  }, [buildReady, healthStale, recheck]);
   // Before the first search the page is one centred prompt; afterwards the
   // field moves up and the sentences take the space.
   const working =

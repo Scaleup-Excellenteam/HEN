@@ -497,3 +497,41 @@ class TestTheSnapshotBeforeAnythingStarts:
         assert snapshot.cache_mode is CacheMode.UNKNOWN
         assert snapshot.index is None
         assert snapshot.error_code is None
+
+
+class TestCountersMeanOneThing:
+    """The file, sentence and byte counters describe corpus *ingestion*.
+
+    Fingerprinting reads every file too, but reading a file to hash it is not
+    reading it into the index. Reporting both through the same counters made
+    the interface show the whole corpus as read before a single sentence had
+    been collected.
+    """
+
+    def test_ingestion_counters_start_from_zero_when_reading_starts(self, workspace):
+        tracker = ProgressTracker(throttle_seconds=0.0)
+        prepare(workspace, tracker)
+
+        reading = [s for s in tracker.since(0) if s.phase is BuildPhase.READING_FILES]
+        assert reading[0].files_done < 4, "the fingerprint's count leaked into reading"
+        assert reading[-1].files_done == 4
+
+    def test_files_read_never_exceeds_the_files_there_are(self, workspace):
+        tracker = ProgressTracker(throttle_seconds=0.0)
+        prepare(workspace, tracker)
+        for snapshot in tracker.since(0):
+            if snapshot.files_total is not None:
+                assert snapshot.files_done <= snapshot.files_total, snapshot.phase
+
+    def test_fingerprinting_reports_its_own_bar_and_not_the_counters(self, workspace):
+        tracker = ProgressTracker(throttle_seconds=0.0)
+        prepare(workspace, tracker)
+        hashing = [
+            s for s in tracker.since(0) if s.phase is BuildPhase.VALIDATING_CORPUS
+        ]
+        assert hashing[-1].total == 4
+        assert hashing[-1].current == 4
+        assert hashing[-1].current_file is not None
+        # It reports where it has got to, without claiming anything is indexed.
+        assert hashing[-1].sentences == 0
+        assert hashing[-1].files_done == 0

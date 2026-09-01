@@ -498,6 +498,90 @@ describe("failure", () => {
   });
 });
 
+describe("recovering from a server that was not up yet", () => {
+  it("re-checks health after a failed preparation is retried", async () => {
+    // Health answered "failed" while preparation was failing, and holds it: it
+    // only polls while preparing, so nothing would refresh it on its own.
+    let healthy = false;
+    const failed = buildStatus({
+      state: "failed",
+      error_message: "It stopped.",
+      can_retry: true,
+      index: null,
+    });
+    const original = mockApi({
+      buildSequence: [failed, buildStatus({ sequence: 900 })],
+      retryStatus: buildingStatus({ sequence: 800 }),
+    });
+    const previous = original.fetchMock.getMockImplementation();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).startsWith("/api/health")) {
+          return new Response(
+            JSON.stringify(
+              healthy
+                ? { status: "ready", ready: true, detail: "Ready to search." }
+                : {
+                    status: "failed",
+                    ready: false,
+                    detail: "The search index could not be prepared.",
+                  },
+            ),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return previous!(input, init);
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: /try again/i }));
+
+    // The retry succeeds, and the next look at the build finds it ready.
+    healthy = true;
+
+    await searchable();
+    await waitFor(() =>
+      expect(screen.queryByText(/the index could not be prepared/i)).toBeNull(),
+    );
+  });
+
+  it("re-checks health once preparation reports readiness", async () => {
+    useFakeEventSource();
+    // The page opens before the server does: health fails, and the build
+    // stream is still trying.
+    let healthUp = false;
+    const original = mockApi({ build: buildingStatus() });
+    const previous = original.fetchMock.getMockImplementation();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).startsWith("/api/health") && !healthUp) {
+          throw new TypeError("Failed to fetch");
+        }
+        return previous!(input, init);
+      }),
+    );
+
+    render(<App />);
+    await screen.findByText("Preparing mission data");
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined());
+
+    // The server finishes preparing and is now answering.
+    healthUp = true;
+    FakeEventSource.latest().send(buildStatus({ sequence: 900 }));
+
+    // Without the re-check the page would say the system is ready and that the
+    // service is not running, at the same time.
+    await searchable();
+    await waitFor(() =>
+      expect(screen.queryByText(/the search service is not running/i)).toBeNull(),
+    );
+  });
+});
+
 describe("the server being unreachable", () => {
   it("does not claim the build failed", async () => {
     mockApi({ failBuild: true });

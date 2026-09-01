@@ -113,26 +113,25 @@ def fingerprint(root: Path | str, sink: ProgressSink | None = None) -> str:
     ``sink`` receives real progress: the walk is indeterminate until the file
     count is known, and determinate by file afterwards. Every path reported is
     the corpus-relative one, never the path on disk.
+
+    Only this phase's own bar is reported, not the ingestion counters. Hashing a
+    file is not reading it into the index, and reporting both through the same
+    counters made "files read" show the whole corpus before a single sentence
+    had been collected.
     """
     watcher = sink or NULL_SINK
     watcher.begin(
         BuildPhase.VALIDATING_CORPUS,
-        detail="Hashing the corpus to check the cached index against it.",
+        detail="Fingerprinting the corpus.",
         determinate=False,
     )
 
     files = list(iter_files(root))
     watcher.update(
-        total=len(files),
-        files_total=len(files),
-        bytes_total=sum(corpus_file.path.stat().st_size for corpus_file in files)
-        if sink is not None
-        else None,
-        detail=f"Hashing {len(files):,} corpus files.",
+        total=len(files), detail=f"Fingerprinting {len(files):,} corpus files."
     )
 
     digest = hashlib.sha256()
-    processed = 0
     for position, corpus_file in enumerate(files, start=1):
         encoded_path = corpus_file.source_text.encode("utf-8")
         data = corpus_file.path.read_bytes()
@@ -140,11 +139,5 @@ def fingerprint(root: Path | str, sink: ProgressSink | None = None) -> str:
         digest.update(encoded_path)
         digest.update(len(data).to_bytes(8, "little"))
         digest.update(data)
-        processed += len(data)
-        watcher.update(
-            current=position,
-            files_done=position,
-            bytes_done=processed,
-            current_file=corpus_file.source_text,
-        )
+        watcher.update(current=position, current_file=corpus_file.source_text)
     return digest.hexdigest()
