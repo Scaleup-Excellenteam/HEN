@@ -41,10 +41,16 @@ __all__ = [
     "CacheError",
     "CacheMiss",
     "FORMAT_VERSION",
+    "GENERATION_PREFIX",
     "MANIFEST_FILE",
     "POINTER_FILE",
     "build_or_load",
+    "current_generation",
+    "discard_other_generations",
+    "flush_directory",
     "load",
+    "new_generation_name",
+    "publish_pointer",
     "save",
 ]
 
@@ -54,7 +60,12 @@ FORMAT_VERSION = 2
 
 POINTER_FILE = "CURRENT"
 MANIFEST_FILE = "manifest.json"
-_GENERATION_PREFIX = "gen-"
+
+#: Names a self-contained generation directory. Public because the generation
+#: and pointer discipline below is reused for other atomically published
+#: directories, not only the corpus index.
+GENERATION_PREFIX = "gen-"
+
 _POINTER_TEMP_PREFIX = f"{POINTER_FILE}.tmp-"
 
 Logger = Callable[[str], None]
@@ -83,7 +94,7 @@ def save(index: SearchIndex, cache_dir: Path | str, corpus_hash: str) -> Path:
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    generation = f"{_GENERATION_PREFIX}{corpus_hash[:12]}-{uuid.uuid4().hex[:8]}"
+    generation = new_generation_name(corpus_hash)
     generation_dir = cache_dir / generation
     generation_dir.mkdir()
 
@@ -93,9 +104,9 @@ def save(index: SearchIndex, cache_dir: Path | str, corpus_hash: str) -> Path:
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
 
-    _flush(generation_dir)
-    _point_at(cache_dir, generation)
-    _discard_other_generations(cache_dir, keep=generation)
+    flush_directory(generation_dir)
+    publish_pointer(cache_dir, generation)
+    discard_other_generations(cache_dir, keep=generation)
     return generation_dir
 
 
@@ -131,7 +142,7 @@ def load(
         raise ValueError(f"the {level!r} validation level needs the corpus hash")
 
     cache_dir = Path(cache_dir)
-    generation_dir = _current_generation(cache_dir)
+    generation_dir = current_generation(cache_dir)
     manifest = _read_manifest(generation_dir)
 
     if manifest.get("format_version") != FORMAT_VERSION:
@@ -235,19 +246,35 @@ def build_or_load(
     return index
 
 
-def _current_generation(cache_dir: Path) -> Path:
-    pointer = cache_dir / POINTER_FILE
+def new_generation_name(fingerprint: str) -> str:
+    """A fresh generation directory name, tagged with what it was built from.
+
+    The random suffix is what lets two builds of the same input write separate
+    directories instead of one overwriting the other's half-written files.
+    """
+    return f"{GENERATION_PREFIX}{fingerprint[:12]}-{uuid.uuid4().hex[:8]}"
+
+
+def current_generation(directory: Path | str) -> Path:
+    """The generation the pointer in ``directory`` names.
+
+    Raises:
+        CacheMiss: if there is no pointer, or it does not name a generation
+            directory that exists.
+    """
+    directory = Path(directory)
+    pointer = directory / POINTER_FILE
     try:
         named = pointer.read_text(encoding="utf-8").strip()
     except OSError as exc:
-        raise CacheMiss(f"no usable cache in {cache_dir}") from exc
+        raise CacheMiss(f"no usable cache in {directory}") from exc
 
     # The pointer is data on disk: never let it address anything but a
     # generation directly inside the cache directory.
-    if not named.startswith(_GENERATION_PREFIX) or named != Path(named).name:
+    if not named.startswith(GENERATION_PREFIX) or named != Path(named).name:
         raise CacheMiss(f"cache pointer does not name a generation: {named!r}")
 
-    generation_dir = cache_dir / named
+    generation_dir = directory / named
     if not generation_dir.is_dir():
         raise CacheMiss(f"cache pointer names a missing generation: {named}")
     return generation_dir
@@ -302,25 +329,31 @@ def _check_arrays(index: SearchIndex, manifest: dict) -> None:
             )
 
 
-def _point_at(cache_dir: Path, generation: str) -> None:
-    """Publish a generation by renaming the pointer onto it."""
-    temporary = cache_dir / f"{_POINTER_TEMP_PREFIX}{os.getpid()}-{uuid.uuid4().hex[:6]}"
+def publish_pointer(directory: Path | str, generation: str) -> None:
+    """Publish a generation by renaming the pointer onto it.
+
+    Renaming one file is atomic, so a reader sees either the previous
+    generation or this one, never a mixture of the two.
+    """
+    directory = Path(directory)
+    temporary = directory / f"{_POINTER_TEMP_PREFIX}{os.getpid()}-{uuid.uuid4().hex[:6]}"
     temporary.write_text(f"{generation}\n", encoding="utf-8")
     _flush_file(temporary)
-    os.replace(temporary, cache_dir / POINTER_FILE)
-    _flush_directory(cache_dir)
+    os.replace(temporary, directory / POINTER_FILE)
+    _flush_directory(directory)
 
 
-def _discard_other_generations(cache_dir: Path, keep: str) -> None:
+def discard_other_generations(cache_dir: Path | str, keep: str) -> None:
     """Remove superseded generations and abandoned pointer files.
 
     Failures are ignored: tidying up must never break a build that has already
     published its result.
     """
+    cache_dir = Path(cache_dir)
     for entry in cache_dir.iterdir():
         if entry.name == keep:
             continue
-        stale_generation = entry.is_dir() and entry.name.startswith(_GENERATION_PREFIX)
+        stale_generation = entry.is_dir() and entry.name.startswith(GENERATION_PREFIX)
         stale_pointer = entry.is_file() and entry.name.startswith(_POINTER_TEMP_PREFIX)
         try:
             if stale_generation:
@@ -339,10 +372,13 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _flush(directory: Path) -> None:
-    """Make a directory's contents durable before anything points at them."""
+def flush_directory(directory: Path | str) -> None:
+    """Make a directory tree's contents durable before anything points at it."""
+    directory = Path(directory)
     for entry in sorted(directory.iterdir()):
-        if entry.is_file():
+        if entry.is_dir():
+            flush_directory(entry)
+        elif entry.is_file():
             _flush_file(entry)
     _flush_directory(directory)
 

@@ -20,6 +20,16 @@ prototypes/artifacts/
 # Benchmark output
 benchmarks/results/
 
+# Documents imported from Google Drive, and the index built over them. User
+# content and generated artifacts: never committed.
+.drive-data/
+drive-data/
+
+# Deployment-specific Google configuration. .env.example is the committed one.
+.env
+.env.*
+!.env.example
+
 # OS
 .DS_Store
 
