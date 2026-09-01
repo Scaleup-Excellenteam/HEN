@@ -47,7 +47,8 @@ pytest                     # run the test suite
 ```
 
 Settings live in `config.yaml`; every key is optional and documented in that
-file. Relative paths there resolve against the file's own directory, and so do
+file. Setting `HEN_CONFIG` to another file's path uses that instead, which is how
+a throwaway corpus and cache can be served without touching your own. Relative paths there resolve against the file's own directory, and so do
 the defaults for keys you omit, so the program behaves the same from any working
 directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 
@@ -67,6 +68,9 @@ directory. Point `corpus_root` at the extracted `Archive.zip` tree.
 An optional browser interface is included as an extension; see
 [Web interface](#web-interface-optional). The command line remains the interface
 the assignment asks for, and the engine is unchanged.
+
+The browser interface shows the corpus preparation as it happens, from real
+progress events; see [Watching the index being built](#watching-the-index-being-built).
 
 The program works end to end. `python main.py` prepares the corpus and then
 takes queries:
@@ -196,6 +200,7 @@ pytest tests/test_records.py tests/test_cache.py   # the offline phase
 pytest tests/test_suffix_index.py tests/test_topk.py tests/test_exact_search.py
 pytest tests/test_engine.py tests/test_engine_differential.py   # the tier walk
 pytest tests/test_cli.py          # the interactive loop
+pytest tests/test_progress.py tests/test_preparation.py tests/test_build_api.py
 ```
 
 ## Web interface (optional)
@@ -257,6 +262,64 @@ npm run build       # production build into web/dist
 npm run preview     # serve that build
 ```
 
+### Watching the index being built
+
+The interface is available immediately. When the index is not ready it shows what
+the server is doing: the phase that is running, the corpus file being read, files
+and sentences and bytes processed, which phases have finished and how long each
+took, elapsed time, and whether this is a first build, a cache check, a warm load
+or a rebuild. Searching stays unavailable until a complete index is published,
+and the screen gives way to the search interface by itself the moment it is.
+
+Everything shown is measured. There is no estimated time remaining, and no bar
+moves on a timer. A phase whose progress the underlying code cannot report — the
+suffix array is one call into a C library that says nothing until it returns — is
+shown as active and unquantified rather than given an invented number.
+
+After readiness, a quiet **System ready** line under the results opens to report
+how the system started: sentences, files, searchable text, whether it was a cold
+or warm start, and how long preparation took.
+
+```bash
+curl 'http://127.0.0.1:8000/api/build/status'      # the latest snapshot
+curl -N 'http://127.0.0.1:8000/api/build/events'   # a live stream of them
+```
+
+Because the API prepares the index *after* it starts, `./run.sh` no longer waits
+for a build before serving the page. `./run.sh --rebuild-index` still rebuilds in
+the foreground first, since discarding a valid index is deliberate.
+
+#### Seeing a first build without touching your cache
+
+Do not delete your cache to see the progress screen. `HEN_CONFIG` points the
+program at a different configuration file, so a throwaway corpus and cache can be
+used instead:
+
+```bash
+mkdir -p /tmp/hen-demo/corpus
+printf 'corpus_root: corpus\ncache_dir: cache\nnum_results: 5\n' > /tmp/hen-demo/config.yaml
+python - <<'PY'
+from pathlib import Path
+root = Path("/tmp/hen-demo/corpus"); root.mkdir(parents=True, exist_ok=True)
+for n in range(400):
+    (root / f"module-{n:03d}.txt").write_text(
+        "\n".join(f"mission telemetry report {n} entry {i}" for i in range(2000)) + "\n",
+        encoding="utf-8")
+PY
+
+HEN_CONFIG=/tmp/hen-demo/config.yaml \
+  python -m uvicorn autocomplete.web:create_app --factory --port 8000   # terminal 1
+cd web && npm run build && npm run preview -- --port 4173               # terminal 2
+```
+
+Open <http://localhost:4173>. Remove `/tmp/hen-demo/cache` and restart the API to
+watch a first build again, and delete `/tmp/hen-demo` when you are done. Your own
+corpus and cache are never involved.
+
+The design, the phase definitions, the streaming contract and the measurements
+are in
+[docs/design/2026-09-01-index-build-progress-notes.md](docs/design/2026-09-01-index-build-progress-notes.md).
+
 ### The API
 
 ```bash
@@ -288,7 +351,7 @@ engine's order and are not re-ranked anywhere. Design decisions are recorded in
 | Symptom | Cause and fix |
 |---|---|
 | "The search service is not running" | The API is not up. Start it with the uvicorn command above. |
-| The page waits on "getting the corpus ready" | The index is being built, which takes about 17 seconds the first time. It resolves on its own. |
+| The page shows "Preparing mission data" | The index is being built, which takes about 17 seconds the first time. The screen reports what it is doing and resolves on its own. |
 | "The search index could not be prepared" | `corpus_root` in `config.yaml` does not point at the text files. |
 | The API exits complaining about `pydivsufsort` | `pip install -r requirements.txt`, then check with `python -c "from autocomplete.suffix_index import verify_builder; verify_builder()"`. |
 | The frontend fails to start after a pull | Dependencies are stale: `cd web && rm -rf node_modules && npm install`, or just `./run.sh`. |
@@ -301,6 +364,7 @@ engine's order and are not re-ranked anywhere. Design decisions are recorded in
 python -m benchmarks            # measure the configured corpus against the gates
 python -m benchmarks --build    # also time a cold build, in a temporary cache
 python -m benchmarks --json out.json
+python -m benchmarks.progress   # what progress reporting costs, separately
 ```
 
 Latency is judged per query class, never on a blended figure, so a slow class
@@ -310,6 +374,12 @@ against 300, a warm start of 0.10 s against 5, a 659 MB cache against 1 GB, and
 typing at a median of 0.83 ms against 10. Full results and the reasoning behind
 the query classes are in
 [docs/design/2026-08-31-m7-benchmark-report.md](docs/design/2026-08-31-m7-benchmark-report.md).
+
+`python -m benchmarks.progress` measures the preparation-progress feature and is
+deliberately outside those gates: they describe the search, and an optional
+interface feature must not spend their budget. It writes only to temporary
+directories. Reporting adds 14.8 ms to a cold build, 0.088% of it, measured
+directly rather than by differencing two runs that vary by more than that.
 
 The search tests check every answer against one computed directly: suffix order
 against Python's own sort of the suffixes, ranges against a scan for the
@@ -358,6 +428,8 @@ autocomplete/       production package
   topk.py           block summaries, for picking winners from a huge range
   index.py          the record store and its search structures as one unit
   engine.py         answering queries: the score-tier walk
+  progress.py       typed preparation progress, and the tracker that collects it
+  preparation.py    running one preparation and rewriting any failure safely
   cli.py            the interactive completion loop
   cache.py          storing and validating a built index
   reference.py      slow brute-force engine used to define correctness
