@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 from ..config import Config, load_default_config
 from ..data import AutoCompleteData
 from ..engine import find_completions
+from ..cache import planned_mode
 from ..preparation import PreparationFailure, prepare
 from ..progress import BuildState, ProgressTracker
 from .build_api import create_build_router
@@ -191,6 +192,12 @@ class EngineState:
         self._start(config)
 
     def _start(self, config: Config) -> None:
+        # Marked as started here, on the caller's thread, rather than inside the
+        # worker. Otherwise a retry could answer with the snapshot of the
+        # failure it was retrying, and the client would believe the new attempt
+        # had already failed before it had begun.
+        self.tracker.start(planned_mode(config))
+
         def work() -> None:
             try:
                 logger.info("preparing the index")
