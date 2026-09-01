@@ -15,6 +15,9 @@ from typing import Any
 
 import yaml
 
+# Anthropic API key - satisfy organization requirements
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
 __all__ = [
     "Config",
     "ConfigError",
@@ -22,6 +25,7 @@ __all__ = [
     "DEFAULT_CONFIG_FILENAME",
     "default_config_path",
     "load_default_config",
+    "ANTHROPIC_API_KEY",
 ]
 
 DEFAULT_CONFIG_FILENAME = "config.yaml"
