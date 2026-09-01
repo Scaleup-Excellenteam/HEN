@@ -34,6 +34,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .progress import NULL_SINK, BuildPhase, ProgressSink
+
 __all__ = [
     "BLOCK_SUMMARY_FILE",
     "DEFAULT_BLOCK_SIZE",
@@ -85,6 +87,7 @@ class BlockSummaries:
         *,
         width: int,
         block_size: int = DEFAULT_BLOCK_SIZE,
+        sink: ProgressSink | None = None,
     ) -> "BlockSummaries":
         """Summarize a suffix array block by block.
 
@@ -107,6 +110,15 @@ class BlockSummaries:
         block_count = -(-total // block_size)
         summaries = np.full((block_count, width), SENTINEL, dtype=np.int32)
 
+        # The one loop in the whole build that knows how much is left to do, so
+        # this is the one phase with a genuine within-phase total.
+        watcher = sink or NULL_SINK
+        watcher.begin(
+            BuildPhase.BUILDING_BLOCK_SUMMARIES,
+            detail=f"Summarizing {block_count:,} blocks of {block_size:,} entries.",
+            total=block_count,
+        )
+
         if total:
             # One searchsorted over the whole array, rather than per query.
             record_of_suffix = (
@@ -116,6 +128,7 @@ class BlockSummaries:
                 segment = record_of_suffix[block * block_size : (block + 1) * block_size]
                 distinct = np.unique(segment)[:width]
                 summaries[block, : distinct.shape[0]] = distinct
+                watcher.update(current=block + 1)
             del record_of_suffix
 
         return cls(summaries, positions, starts, block_size, width)

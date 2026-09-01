@@ -35,6 +35,7 @@ from .config import VALIDATION_LEVELS, Config
 from .data import TIE_BREAK_POLICY
 from .index import ARTIFACT_FILES, SearchIndex
 from .normalize import DEFAULT_PUNCTUATION_POLICY
+from .progress import NULL_SINK, BuildPhase, CacheMode, ProgressSink
 from .topk import DEFAULT_BLOCK_SIZE
 
 __all__ = [
@@ -45,6 +46,7 @@ __all__ = [
     "POINTER_FILE",
     "build_or_load",
     "load",
+    "planned_mode",
     "save",
 ]
 
@@ -73,13 +75,23 @@ class CacheMiss(CacheError):
     """
 
 
-def save(index: SearchIndex, cache_dir: Path | str, corpus_hash: str) -> Path:
+def save(
+    index: SearchIndex,
+    cache_dir: Path | str,
+    corpus_hash: str,
+    sink: ProgressSink | None = None,
+) -> Path:
     """Write ``index`` as a new generation and make it the current one.
 
     Every artifact is written into a fresh directory, so an index that is
     already published is never modified in place. Returns the generation
     directory.
+
+    ``sink`` is told which stage is running. It is never told where: a
+    generation directory is an internal name, and publishing is reported as an
+    event rather than as a path.
     """
+    watcher = sink or NULL_SINK
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -87,12 +99,29 @@ def save(index: SearchIndex, cache_dir: Path | str, corpus_hash: str) -> Path:
     generation_dir = cache_dir / generation
     generation_dir.mkdir()
 
+    watcher.begin(
+        BuildPhase.WRITING_ARTIFACTS,
+        detail=f"Writing {len(ARTIFACT_FILES)} index artifacts.",
+        total=len(ARTIFACT_FILES),
+    )
     index.write_to(generation_dir)
-    manifest = _build_manifest(index, corpus_hash, generation_dir)
+    watcher.update(current=len(ARTIFACT_FILES))
+
+    watcher.begin(
+        BuildPhase.CHECKSUMMING_ARTIFACTS,
+        detail="Checksumming what was written.",
+        total=len(ARTIFACT_FILES),
+    )
+    manifest = _build_manifest(index, corpus_hash, generation_dir, watcher)
     (generation_dir / MANIFEST_FILE).write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
 
+    watcher.begin(
+        BuildPhase.PUBLISHING_GENERATION,
+        detail="Making the new index the one that is served.",
+        determinate=False,
+    )
     _flush(generation_dir)
     _point_at(cache_dir, generation)
     _discard_other_generations(cache_dir, keep=generation)
@@ -107,6 +136,7 @@ def load(
     use_mmap: bool = True,
     summary_width: int,
     block_size: int = DEFAULT_BLOCK_SIZE,
+    sink: ProgressSink | None = None,
 ) -> SearchIndex:
     """Read the current cache, refusing anything that cannot be trusted.
 
@@ -157,7 +187,18 @@ def load(
     if not isinstance(artifacts, dict) or set(artifacts) != set(ARTIFACT_FILES):
         raise CacheMiss("manifest does not describe the expected set of files")
 
-    for filename, expected in artifacts.items():
+    watcher = sink or NULL_SINK
+    watcher.begin(
+        BuildPhase.VALIDATING_ARTIFACTS,
+        detail=(
+            "Checksumming every cached artifact."
+            if level == "full"
+            else "Checking the cached artifacts against the manifest."
+        ),
+        total=len(artifacts),
+    )
+    validated = 0
+    for position, (filename, expected) in enumerate(sorted(artifacts.items()), start=1):
         path = generation_dir / filename
         try:
             actual_size = path.stat().st_size
@@ -170,7 +211,14 @@ def load(
             )
         if level == "full" and _sha256(path) != expected.get("sha256"):
             raise CacheMiss(f"cached file {filename} does not match its checksum")
+        validated += actual_size
+        watcher.update(current=position, current_file=filename, bytes_done=validated)
 
+    watcher.begin(
+        BuildPhase.LOADING_ARTIFACTS,
+        detail="Memory-mapping the index." if use_mmap else "Reading the index.",
+        determinate=False,
+    )
     try:
         index = SearchIndex.read_from(
             generation_dir,
@@ -190,19 +238,48 @@ def load(
     return index
 
 
+def planned_mode(config: Config, force_rebuild: bool = False) -> CacheMode:
+    """Which route preparation will take, decided before any work starts.
+
+    Reads one thing: whether a pointer file exists. That is enough to tell a
+    first build from a run that has a cache to check, and it lets an interface
+    say which is happening from the first moment rather than inferring it from
+    how long something is taking.
+    """
+    if force_rebuild:
+        return CacheMode.FORCED_REBUILD
+    if (Path(config.cache_dir) / POINTER_FILE).is_file():
+        return CacheMode.WARM_VALIDATION
+    return CacheMode.COLD_BUILD
+
+
 def build_or_load(
     config: Config,
     *,
     force_rebuild: bool = False,
     block_size: int = DEFAULT_BLOCK_SIZE,
     log: Logger | None = None,
+    sink: ProgressSink | None = None,
 ) -> SearchIndex:
-    """Return a ready index, reusing the cache when it is still valid."""
+    """Return a ready index, reusing the cache when it is still valid.
+
+    ``sink`` is told which of the four routes is being taken before any work
+    starts, so an interface can say "checking the cache" rather than "working"
+    from the first moment. The route is decided by whether a rebuild was asked
+    for and whether a pointer exists, not by guessing from how long something
+    takes.
+    """
     announce = log or (lambda message: None)
+    watcher = sink or NULL_SINK
+
+    # Whether a cache is even present decides what the first phase means, and
+    # whether a later failure to load it is a cold build or a recovery.
+    had_cache = (Path(config.cache_dir) / POINTER_FILE).is_file()
+    watcher.note_cache_mode(planned_mode(config, force_rebuild))
 
     corpus_hash: str | None = None
     if config.validation_level in ("content", "full"):
-        corpus_hash = corpus.fingerprint(config.corpus_root)
+        corpus_hash = corpus.fingerprint(config.corpus_root, sink)
 
     if not force_rebuild:
         try:
@@ -213,24 +290,32 @@ def build_or_load(
                 use_mmap=config.use_mmap,
                 summary_width=config.num_results,
                 block_size=block_size,
+                sink=sink,
             )
         except CacheMiss as reason:
             announce(f"building the index ({reason})")
+            # A cache that was there and could not be used is a recovery; one
+            # that was never there is simply a first build.
+            watcher.note_cache_mode(
+                CacheMode.RECOVERY if had_cache else CacheMode.COLD_BUILD
+            )
         else:
             announce(f"loaded {len(index)} records from cache")
+            watcher.note_cache_mode(CacheMode.WARM_LOAD)
             return index
     else:
         announce("building the index (rebuild requested)")
 
     if corpus_hash is None:
-        corpus_hash = corpus.fingerprint(config.corpus_root)
+        corpus_hash = corpus.fingerprint(config.corpus_root, sink)
     index = SearchIndex.build(
         config.corpus_root,
         summary_width=config.num_results,
         block_size=block_size,
         log=announce,
+        sink=sink,
     )
-    generation = save(index, config.cache_dir, corpus_hash)
+    generation = save(index, config.cache_dir, corpus_hash, sink)
     announce(f"wrote generation {generation.name}")
     return index
 
@@ -267,18 +352,28 @@ def _read_manifest(generation_dir: Path) -> dict:
     return manifest
 
 
-def _build_manifest(index: SearchIndex, corpus_hash: str, generation_dir: Path) -> dict:
+def _build_manifest(
+    index: SearchIndex,
+    corpus_hash: str,
+    generation_dir: Path,
+    sink: ProgressSink | None = None,
+) -> dict:
+    watcher = sink or NULL_SINK
+    artifacts = {}
+    for position, filename in enumerate(ARTIFACT_FILES, start=1):
+        path = generation_dir / filename
+        artifacts[filename] = {
+            "bytes": path.stat().st_size,
+            "sha256": _sha256(path),
+        }
+        # The artifact's own name, which is fixed by this module, never the
+        # directory it happens to live in.
+        watcher.update(current=position, current_file=filename)
     return {
         "format_version": FORMAT_VERSION,
         "corpus_hash": corpus_hash,
         **index.describe(),
-        "artifacts": {
-            filename: {
-                "bytes": (generation_dir / filename).stat().st_size,
-                "sha256": _sha256(generation_dir / filename),
-            }
-            for filename in ARTIFACT_FILES
-        },
+        "artifacts": artifacts,
     }
 
 

@@ -18,6 +18,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from .progress import NULL_SINK, BuildPhase, ProgressSink
+
 __all__ = [
     "CORPUS_SUFFIX",
     "CorpusFile",
@@ -100,20 +102,49 @@ def read_lines(corpus_file: CorpusFile) -> Iterator[tuple[int, str]]:
     return iter_lines(corpus_file.path.read_bytes())
 
 
-def fingerprint(root: Path | str) -> str:
+def fingerprint(root: Path | str, sink: ProgressSink | None = None) -> str:
     """Hash the corpus content, for detecting that a cache is out of date.
 
     Covers both the set of files and their contents, so an edit that leaves a
     file's size and timestamp unchanged is still noticed. Each path and each
     file's bytes are length-prefixed before hashing, so no combination of names
     and contents can be rearranged into the same byte stream.
+
+    ``sink`` receives real progress: the walk is indeterminate until the file
+    count is known, and determinate by file afterwards. Every path reported is
+    the corpus-relative one, never the path on disk.
     """
+    watcher = sink or NULL_SINK
+    watcher.begin(
+        BuildPhase.VALIDATING_CORPUS,
+        detail="Hashing the corpus to check the cached index against it.",
+        determinate=False,
+    )
+
+    files = list(iter_files(root))
+    watcher.update(
+        total=len(files),
+        files_total=len(files),
+        bytes_total=sum(corpus_file.path.stat().st_size for corpus_file in files)
+        if sink is not None
+        else None,
+        detail=f"Hashing {len(files):,} corpus files.",
+    )
+
     digest = hashlib.sha256()
-    for corpus_file in iter_files(root):
+    processed = 0
+    for position, corpus_file in enumerate(files, start=1):
         encoded_path = corpus_file.source_text.encode("utf-8")
         data = corpus_file.path.read_bytes()
         digest.update(len(encoded_path).to_bytes(4, "little"))
         digest.update(encoded_path)
         digest.update(len(data).to_bytes(8, "little"))
         digest.update(data)
+        processed += len(data)
+        watcher.update(
+            current=position,
+            files_done=position,
+            bytes_done=processed,
+            current_file=corpus_file.source_text,
+        )
     return digest.hexdigest()

@@ -33,6 +33,7 @@ import numpy as np
 from . import corpus
 from .data import AutoCompleteData, tie_break_key
 from .normalize import ALPHABET, normalize
+from .progress import NULL_SINK, BuildPhase, ProgressSink
 
 __all__ = [
     "ARTIFACT_FILES",
@@ -142,22 +143,66 @@ class RecordStore:
         return np.searchsorted(self.starts, positions, side="right") - 1
 
     @classmethod
-    def build(cls, root: Path | str) -> "RecordStore":
+    def build(cls, root: Path | str, sink: ProgressSink | None = None) -> "RecordStore":
         """Read a corpus directory and lay it out for searching.
 
         Lines that normalize to nothing are dropped: they cannot match any query,
         so indexing them would only cost space.
+
+        ``sink`` receives the file being read, how many are done, how many
+        sentences have been kept and how many bytes have been consumed. All of
+        those are counted, not estimated, and the path reported is always the
+        corpus-relative one.
         """
+        watcher = sink or NULL_SINK
+
+        watcher.begin(
+            BuildPhase.DISCOVERING_CORPUS,
+            detail="Walking the corpus directory.",
+            determinate=False,
+        )
         files = list(corpus.iter_files(root))
         paths = tuple(corpus_file.source_text for corpus_file in files)
 
+        # Only stat the tree when somebody is watching: it is a syscall per file
+        # that buys nothing except a byte total to show.
+        total_bytes = (
+            sum(corpus_file.path.stat().st_size for corpus_file in files)
+            if sink is not None
+            else None
+        )
+        watcher.begin(
+            BuildPhase.READING_FILES,
+            detail=f"Reading {len(files):,} corpus files.",
+            total=len(files),
+        )
+        watcher.update(files_total=len(files), bytes_total=total_bytes)
+
         collected: list[tuple[str, int, int, bytes]] = []
+        consumed = 0
         for file_index, corpus_file in enumerate(files):
-            for line_number, text in corpus.read_lines(corpus_file):
+            # Read the bytes here rather than through corpus.read_lines, so the
+            # size of each file is known without a second syscall to ask for it.
+            data = corpus_file.path.read_bytes()
+            for line_number, text in corpus.iter_lines(data):
                 normalized = normalize(text)
                 if normalized:
                     collected.append((text, file_index, line_number, normalized))
+            consumed += len(data)
+            watcher.update(
+                current=file_index + 1,
+                files_done=file_index + 1,
+                current_file=corpus_file.source_text,
+                sentences=len(collected),
+                bytes_done=consumed,
+            )
 
+        watcher.begin(
+            BuildPhase.NORMALIZING_RECORDS,
+            detail=f"Ordering {len(collected):,} sentences.",
+            determinate=False,
+        )
+        watcher.update(sentences=len(collected), files_done=len(files), files_total=len(files))
         collected.sort(
             key=lambda record: tie_break_key(record[0], paths[record[1]], record[2])
         )

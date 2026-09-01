@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .data import TIE_BREAK_POLICY
 from .normalize import DEFAULT_PUNCTUATION_POLICY
+from .progress import NULL_SINK, BuildPhase, IndexStats, ProgressSink
 from .records import ARTIFACT_FILES as RECORD_FILES
 from .records import RecordStore
 from .suffix_index import SUFFIX_ARRAY_FILE, SuffixIndex
@@ -57,18 +58,38 @@ class SearchIndex:
         summary_width: int,
         block_size: int = DEFAULT_BLOCK_SIZE,
         log: Logger | None = None,
+        sink: ProgressSink | None = None,
     ) -> "SearchIndex":
-        """Read a corpus and prepare every structure needed to search it."""
+        """Read a corpus and prepare every structure needed to search it.
+
+        ``log`` is the plain text logger the command line prints; ``sink`` is the
+        structured one an interface watches. They are independent, and both are
+        optional, so nothing about the command line changes when nothing is
+        watching and nothing about watching changes what is printed.
+        """
         announce = log or (lambda message: None)
+        watcher = sink or NULL_SINK
 
         started = time.perf_counter()
-        records = RecordStore.build(root)
+        records = RecordStore.build(root, sink)
         announce(
             f"read {len(records):,} sentences from {len(records.paths):,} files "
             f"in {time.perf_counter() - started:.1f}s"
         )
 
         started = time.perf_counter()
+        # The suffix array is one call into a C library that reports nothing
+        # part-way, so this phase is indeterminate by construction. What is
+        # honest to show is how much text it is ordering, which is known.
+        watcher.begin(
+            BuildPhase.BUILDING_SUFFIX_ARRAY,
+            detail=(
+                f"Ordering every suffix of {len(records.norm_blob) / 1e6:.1f} MB "
+                f"of normalized text."
+            ),
+            determinate=False,
+        )
+        watcher.update(bytes_total=len(records.norm_blob), bytes_done=0)
         suffix = SuffixIndex.build(records.norm_blob, records.max_record_length)
         announce(
             f"built the suffix array over {len(records.norm_blob) / 1e6:.1f} MB "
@@ -81,6 +102,7 @@ class SearchIndex:
             records.starts,
             width=summary_width,
             block_size=block_size,
+            sink=sink,
         )
         announce(
             f"summarized {blocks.summaries.shape[0]:,} blocks of {block_size} "
@@ -126,6 +148,19 @@ class SearchIndex:
         self.records.check_structure()
         self.suffix.check_structure()
         self.blocks.check_structure()
+
+    def stats(self) -> IndexStats:
+        """What this index is, for an interface to report once it is ready."""
+        return IndexStats(
+            sentences=len(self.records),
+            files=len(self.records.paths),
+            searchable_bytes=len(self.records.norm_blob),
+            longest_sentence=self.records.max_record_length,
+            suffix_positions=int(self.suffix.positions.shape[0]),
+            block_count=int(self.blocks.summaries.shape[0]),
+            block_size=self.block_size,
+            summary_width=self.summary_width,
+        )
 
     def describe(self) -> dict:
         """The facts a cache manifest needs to decide this index is reusable.
