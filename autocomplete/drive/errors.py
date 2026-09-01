@@ -33,13 +33,17 @@ class DriveError(RuntimeError):
         code: A stable identifier the interface matches on, so the wording of a
             message can change without breaking the interface.
         message: What went wrong and what to do about it, safe to display.
+        retryable: Whether repeating the same request could succeed. Set by
+            whoever raises it, since only they know: a 503 is worth another
+            attempt, a rejected file type never will be.
     """
 
     code = "drive_error"
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
         super().__init__(message)
         self.message = message
+        self.retryable = retryable
 
 
 class DriveDisabledError(DriveError):
