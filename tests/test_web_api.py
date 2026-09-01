@@ -270,6 +270,14 @@ class TestBoundaries:
         assert "access-control-allow-origin" not in response.headers
 
     def test_no_endpoint_takes_a_filesystem_path(self, client):
+        """Every parameter any endpoint accepts is one of a known few, and none
+        of them names a place on disk.
+
+        The search endpoints take ``q`` and ``limit``. The preparation stream
+        additionally reads ``Last-Event-ID``, which a browser sends by itself to
+        resume a dropped connection; it is a sequence number, and the server
+        treats anything unparseable as zero. Nothing anywhere accepts a path.
+        """
         schema = client.get("/openapi.json").json()
         parameters = [
             parameter["name"]
@@ -277,7 +285,7 @@ class TestBoundaries:
             for operation in path.values()
             for parameter in operation.get("parameters", [])
         ]
-        assert set(parameters) == {"q", "limit"}
+        assert set(parameters) == {"q", "limit", "Last-Event-ID"}
 
     def test_an_unknown_route_is_a_plain_not_found(self, client):
         response = client.get("/api/whatever")
