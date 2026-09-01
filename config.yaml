@@ -22,3 +22,9 @@ use_mmap: true
 #   content    - also re-hash the corpus to detect edited source files (default)
 #   full       - also checksum every cached artifact (use after a crash)
 validation_level: content
+
+# How often (seconds) a running web server checks whether an offline build has
+# published a newer index generation, and adopts it without restarting. 0
+# disables the check, so the index loaded at start-up serves for the life of
+# the process. Ignored by the command line, which prepares an index once.
+refresh_interval: 5

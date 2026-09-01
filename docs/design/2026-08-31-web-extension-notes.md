@@ -20,7 +20,7 @@ calling the engine directly, field for field and in order.
 
 Preparing the index reads the corpus, or a cached build of it, which takes about
 17 seconds the first time and a quarter of a second afterwards. That happens
-**once per server process**, in a thread started when the server starts.
+once per server process, in a thread started when the server starts.
 
 Two consequences matter. The server can answer that it is not ready rather than
 appearing hung, which the interface turns into an honest "getting the corpus
@@ -29,17 +29,28 @@ told so, or sees a finished one: the index is published by a single assignment
 of a completed object, so there is no half-built state to observe. Afterwards it
 is read-only and shared, so concurrent requests need no locking.
 
+**Updated by ZDT** (`2026-09-01-zdt-zero-downtime-notes.md`): preparing the
+*first* index still happens once, but the same thread then keeps polling the
+cache pointer every `Config.refresh_interval` seconds and republishes
+`state.index` — by that same single assignment — whenever an offline build has
+published a newer generation. A request in flight keeps the index it already
+looked up; there is still no half-built state to observe, now across a refresh
+as well as the initial load.
+
 ## API contract
 
 `GET /api/health`
 
 ```json
 { "status": "ready", "ready": true, "detail": "Ready to search.",
-  "sentences": 2391950, "sources": 1504 }
+  "sentences": 2391950, "sources": 1504, "generation": "gen-3f1a9c02e8b1-4a7c9d1e" }
 ```
 
 `status` is `preparing`, `ready` or `failed`. It always answers 200, so the
-interface can distinguish "not ready yet" from "not running".
+interface can distinguish "not ready yet" from "not running". `generation`
+names the cache generation currently being served (`null` before one has been
+adopted); it changes on its own when the background refresh loop picks up a
+newer offline build.
 
 `GET /api/complete?q=<text>&limit=<n>`
 

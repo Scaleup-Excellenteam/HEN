@@ -53,6 +53,10 @@ class Config:
         use_mmap: Memory-map index artifacts instead of reading them into RAM.
         validation_level: How thoroughly a cache is validated when loaded;
             one of :data:`VALIDATION_LEVELS`.
+        refresh_interval: Seconds between checks, by a running web server, for
+            a newer index generation to adopt without restarting. ``0``
+            disables the background check, so the index served at start-up is
+            served for the life of the process.
     """
 
     corpus_root: Path = Path("corpus")
@@ -60,6 +64,7 @@ class Config:
     num_results: int = 5
     use_mmap: bool = True
     validation_level: str = "content"
+    refresh_interval: float = 5.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.corpus_root, Path):
@@ -77,6 +82,14 @@ class Config:
             raise ConfigError(
                 f"validation_level must be one of {list(VALIDATION_LEVELS)}, "
                 f"got {self.validation_level!r}"
+            )
+        if isinstance(self.refresh_interval, bool) or not isinstance(
+            self.refresh_interval, (int, float)
+        ):
+            raise ConfigError("refresh_interval must be a number of seconds")
+        if self.refresh_interval < 0:
+            raise ConfigError(
+                f"refresh_interval must be >= 0, got {self.refresh_interval}"
             )
 
     @classmethod

@@ -279,9 +279,15 @@ curl 'http://127.0.0.1:8000/api/complete?q=the%20internet%20protocl'
 }
 ```
 
-`/api/health` reports `preparing`, `ready` or `failed`. Results come back in the
-engine's order and are not re-ranked anywhere. Design decisions are recorded in
+`/api/health` reports `preparing`, `ready` or `failed`, and, once ready, the
+cache `generation` currently being served. Results come back in the engine's
+order and are not re-ranked anywhere. Design decisions are recorded in
 [docs/design/2026-08-31-web-extension-notes.md](docs/design/2026-08-31-web-extension-notes.md).
+
+The server does not stop watching once it is ready: it keeps polling the cache
+pointer and adopts a newer index generation, published by a later offline
+build, without a restart — see
+[docs/design/2026-09-01-zdt-zero-downtime-notes.md](docs/design/2026-09-01-zdt-zero-downtime-notes.md).
 
 ### If something is not working
 
