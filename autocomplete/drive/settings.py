@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import Config
 
 __all__ = [
+    "DRIVE_SCOPE",
     "DRIVE_SOURCE_PREFIX",
     "GOOGLE_DOC_MIME_TYPE",
     "PLAIN_TEXT_MIME_TYPE",
@@ -37,6 +38,13 @@ __all__ = [
     "DriveSettingsError",
     "load_settings",
 ]
+
+#: The one OAuth scope this feature asks for. Google documents it as covering
+#: "files that you open with an app or that the user shares with an app while
+#: using the Google Picker API", and classifies it as non-sensitive, so it needs
+#: no restricted-scope verification. It cannot list or search the user's Drive,
+#: and no code here tries to: there is no listing call to make.
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
 #: Namespace every imported sentence's ``source_text`` sits under, so a result
 #: from Drive is distinguishable from a corpus one at a glance and the two can
@@ -95,9 +103,27 @@ class DriveSettings:
     supported_mime_types: tuple[str, ...] = SUPPORTED_MIME_TYPES
     timeout_seconds: float = 30.0
     retries: int = 2
-    #: Set when ``enabled`` is true but an identifier is missing; the feature
-    #: then behaves as disabled and says why.
-    missing: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def missing(self) -> tuple[str, ...]:
+        """Identifiers the feature needs and has not been given.
+
+        Derived rather than stored, so it is right however these settings were
+        built: a value constructed in a test cannot claim to be configured when
+        it is not. Empty while the feature is off, because nothing is then
+        required of it.
+        """
+        if not self.enabled:
+            return ()
+        return tuple(
+            name
+            for name, value in (
+                (f"{_PREFIX}CLIENT_ID", self.client_id),
+                (f"{_PREFIX}API_KEY", self.api_key),
+                (f"{_PREFIX}APP_ID", self.app_id),
+            )
+            if not value
+        )
 
     @property
     def configured(self) -> bool:
@@ -131,16 +157,6 @@ class DriveSettings:
         api_key = _text(source, "API_KEY")
         app_id = _text(source, "APP_ID")
 
-        missing = tuple(
-            name
-            for name, value in (
-                (f"{_PREFIX}CLIENT_ID", client_id),
-                (f"{_PREFIX}API_KEY", api_key),
-                (f"{_PREFIX}APP_ID", app_id),
-            )
-            if not value
-        )
-
         data_dir = Path(_text(source, "DATA_DIR") or ".drive-data").expanduser()
         if not data_dir.is_absolute() and base_dir is not None:
             data_dir = base_dir / data_dir
@@ -167,7 +183,6 @@ class DriveSettings:
             max_total_bytes=max_total_bytes,
             timeout_seconds=_positive_float(source, "HTTP_TIMEOUT_SECONDS", 30.0),
             retries=_non_negative_int(source, "HTTP_RETRIES", 2),
-            missing=missing if enabled else (),
         )
 
 

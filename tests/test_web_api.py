@@ -270,14 +270,31 @@ class TestBoundaries:
         assert "access-control-allow-origin" not in response.headers
 
     def test_no_endpoint_takes_a_filesystem_path(self, client):
+        """Every parameter any endpoint accepts is one of a known few, and none
+        of them is free-form text that could become a path.
+
+        The search endpoints take only ``q`` and ``limit``. The Drive import
+        endpoints add two path parameters and one header; the path parameters
+        are constrained to bounded lowercase hex in the schema itself, which is
+        what makes "no endpoint takes a path" checkable rather than asserted.
+        """
         schema = client.get("/openapi.json").json()
-        parameters = [
-            parameter["name"]
+        parameters = {
+            parameter["name"]: parameter
             for path in schema["paths"].values()
             for operation in path.values()
             for parameter in operation.get("parameters", [])
-        ]
-        assert set(parameters) == {"q", "limit"}
+        }
+        assert set(parameters) == {
+            "q",
+            "limit",
+            "job_id",
+            "document_id",
+            "X-Drive-Access-Token",
+        }
+        for name in ("job_id", "document_id"):
+            assert parameters[name]["schema"]["pattern"] == r"^[0-9a-f]+$"
+            assert parameters[name]["schema"]["maxLength"] == 64
 
     def test_an_unknown_route_is_a_plain_not_found(self, client):
         response = client.get("/api/whatever")

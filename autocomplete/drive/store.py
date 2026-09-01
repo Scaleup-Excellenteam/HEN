@@ -328,13 +328,19 @@ class DriveStore:
         prepared: Sequence[PreparedDocument],
         *,
         log: Logger | None = None,
+        on_stage: Callable[[str], None] | None = None,
     ) -> ImportedCorpus:
         """Write a new generation and make it the one that is served.
 
         Nothing already published is touched until the very last step, so a
         failure anywhere in here leaves the previous state serving.
+
+        ``on_stage`` is called with ``"building"`` and then ``"adopting"``, so a
+        caller can report which of the two is happening without guessing at how
+        long either takes.
         """
         announce = log or (lambda message: None)
+        stage = on_stage or (lambda name: None)
         _check_distinct([item.document for item in prepared])
 
         fingerprint = _fingerprint(item.document for item in prepared)
@@ -353,6 +359,7 @@ class DriveStore:
             index: SearchIndex | None = None
             documents = tuple(item.document for item in prepared)
             if documents:
+                stage("building")
                 announce(f"indexing {len(documents)} document(s)")
                 index = SearchIndex.build(
                     sources,
@@ -378,6 +385,7 @@ class DriveStore:
             shutil.rmtree(generation_dir, ignore_errors=True)
             raise
 
+        stage("adopting")
         publish_pointer(self.data_dir, generation_dir.name)
         discard_other_generations(self.data_dir, keep=generation_dir.name)
         announce(f"published {generation_dir.name}")

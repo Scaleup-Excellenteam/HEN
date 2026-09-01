@@ -12,6 +12,13 @@ it is not ready yet rather than appearing hung. Until it finishes, completion
 requests are refused with a state a caller can act on. Afterwards the prepared
 index is read-only and shared, so concurrent requests need no locking beyond the
 handover of the finished object.
+
+**Imported documents.** When the optional Google Drive feature is configured,
+documents a user has imported are held in a second index and searched alongside
+the corpus by :func:`autocomplete.composite.search`, which returns the true best
+results over both. With the feature off, or with nothing imported, ``/api/complete``
+calls the engine directly and answers exactly what it answered before the feature
+existed: same code path, same response, same fields.
 """
 
 from __future__ import annotations
@@ -20,14 +27,20 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .drive_api import create_drive_router
+
+from .. import composite
 from ..config import Config, load_default_config
 from ..data import AutoCompleteData
-from ..engine import find_completions
+
+if TYPE_CHECKING:  # pragma: no cover - import cost avoided at runtime
+    from ..drive.jobs import DriveService
 
 __all__ = ["EngineState", "create_app"]
 
@@ -154,7 +167,12 @@ class EngineState:
         return self.index
 
 
-def create_app(config: Config | None = None, *, prepare: bool = True) -> FastAPI:
+def create_app(
+    config: Config | None = None,
+    *,
+    prepare: bool = True,
+    drive: "DriveService | None" = None,
+) -> FastAPI:
     """Build the application.
 
     Args:
@@ -162,14 +180,23 @@ def create_app(config: Config | None = None, *, prepare: bool = True) -> FastAPI
             so the API and the command line read the same configuration.
         prepare: Start preparing the index when the server starts. Turned off by
             tests that supply an index directly.
+        drive: The Google Drive import feature. Defaults to reading its own
+            settings from the environment, where it is off unless configured.
+            Tests pass one wired to a fake Drive.
     """
     settings = config or load_default_config()
     state = EngineState()
+    drive_service = drive if drive is not None else _drive_service(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if prepare:
             state.prepare(settings)
+        # Adopt whatever was imported before this process started, so imported
+        # documents survive a restart. Never raises: a state that cannot be read
+        # is reported through /api/drive/status, and the corpus search is
+        # unaffected either way.
+        app.state.drive.load_published_state()
         yield
 
     app = FastAPI(
@@ -179,12 +206,15 @@ def create_app(config: Config | None = None, *, prepare: bool = True) -> FastAPI
         lifespan=lifespan,
     )
     app.state.engine = state
+    app.state.drive = drive_service
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(DEVELOPMENT_ORIGINS),
         allow_credentials=False,
-        allow_methods=["GET"],
+        # POST and DELETE are the import and removal endpoints; the search
+        # endpoints are still GET only.
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["*"],
     )
 
@@ -234,7 +264,10 @@ def create_app(config: Config | None = None, *, prepare: bool = True) -> FastAPI
             return CompletionsResponse(query=q, count=0, results=[])
 
         try:
-            results = find_completions(index, q, limit)
+            # The imported index, if there is one, is read once here. Publishing
+            # it is a single assignment of a finished object, so this is either
+            # the state before an import or the state after it, never a mixture.
+            results = composite.search(index, app.state.drive.overlay, q, limit)
         except ValueError as exc:
             # The only ValueError the engine raises here is asking for more
             # results than the index was built to answer.
@@ -246,4 +279,17 @@ def create_app(config: Config | None = None, *, prepare: bool = True) -> FastAPI
             results=[Completion.of(result) for result in results],
         )
 
+    app.include_router(create_drive_router())
     return app
+
+
+def _drive_service(settings: Config) -> "DriveService":
+    """Build the Drive feature from the environment.
+
+    Imported here rather than at module scope so that the import cost, and the
+    module itself, are only reached by the server. The command line never
+    touches this file.
+    """
+    from ..drive.jobs import DriveService
+
+    return DriveService(config=settings)
