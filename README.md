@@ -68,6 +68,11 @@ An optional browser interface is included as an extension; see
 [Web interface](#web-interface-optional). The command line remains the interface
 the assignment asks for, and the engine is unchanged.
 
+An optional Google Drive import lives on the branch `feature/google-drive-import`
+and is described under [Importing from Google Drive](#importing-from-google-drive-optional).
+It is off unless configured, and with it off everything below behaves exactly as
+it does without it.
+
 The program works end to end. `python main.py` prepares the corpus and then
 takes queries:
 
@@ -196,6 +201,8 @@ pytest tests/test_records.py tests/test_cache.py   # the offline phase
 pytest tests/test_suffix_index.py tests/test_topk.py tests/test_exact_search.py
 pytest tests/test_engine.py tests/test_engine_differential.py   # the tier walk
 pytest tests/test_cli.py          # the interactive loop
+pytest tests/test_composite.py tests/test_composite_differential.py  # both corpora
+pytest tests/test_drive_*.py      # the optional Drive import, with no network
 ```
 
 ## Web interface (optional)
@@ -294,6 +301,90 @@ engine's order and are not re-ranked anywhere. Design decisions are recorded in
 | The frontend fails to start after a pull | Dependencies are stale: `cd web && rm -rf node_modules && npm install`, or just `./run.sh`. |
 | A port is already in use | `./run.sh --stop`, which frees ports 8000, 5173 and 4173 whatever is holding them. |
 | Searches return nothing at all | Confirm the API answers: `curl http://127.0.0.1:8000/api/health`. |
+| No "Imported sources" panel | The Drive feature is off. Set it up as above; `./run.sh` prints whether it is enabled. |
+| "Not configured on this server" | `HEN_DRIVE_ENABLED` is true but an identifier is missing; the panel names which one. |
+| The picker does not open | The browser API key must allow both this origin and `https://docs.google.com/*`. |
+| Google refuses the sign-in | This origin is not an authorized JavaScript origin on the OAuth client, or the account is not a test user. |
+
+## Importing from Google Drive (optional)
+
+Add plain `.txt` files and native Google Docs from a Google Drive account, and
+their lines become searchable alongside the corpus. **The feature is off unless
+it is configured**, and while it is off the command line, the API, the web
+interface, the tests and the benchmarks are exactly as they are without it: no
+Google package is needed, nothing contacts Google, and no test needs a network.
+
+This exists only on the branch `feature/google-drive-import`.
+
+### How it works
+
+The corpus index is never rebuilt. Imported documents are indexed on their own,
+and the two answers are merged into the true global best K by score and the same
+tie-break rule the rest of the project uses. Results are not grouped by where they
+came from, and an imported sentence cannot outrank a corpus one except on the
+ordinary rules.
+
+```
+corpus index ──┐
+               ├── composite.search ── the global best K
+overlay index ─┘
+```
+
+The reasoning behind that, the proof that taking K from each index is enough, the
+Cloud Console setup and the measurements are in
+[docs/design/2026-09-01-google-drive-import-notes.md](docs/design/2026-09-01-google-drive-import-notes.md).
+
+### Setting it up
+
+In the Google Cloud Console: enable the **Google Drive API** and the **Google
+Picker API**; add the scope `.../auth/drive.file` to the consent screen; create a
+**Web application** OAuth client with this server's origin as an authorized
+JavaScript origin; and create a browser **API key** restricted to the Picker API,
+allowing both your origin and `https://docs.google.com/*`. The notes above give
+the step-by-step version, including which value is the project *number*.
+
+Then:
+
+```bash
+cp .env.example .env      # fill in the three identifiers, set HEN_DRIVE_ENABLED=true
+./run.sh                  # reads .env and says whether import is enabled
+```
+
+`.env` is ignored by git. None of the three values is a secret — Google treats an
+OAuth client ID and a browser API key as public configuration, protected by origin
+restrictions rather than by being hidden — and this project uses no client secret
+and no service-account key. They are served to the browser by the API rather than
+compiled into the bundle, so changing one needs no rebuild.
+
+### Using it
+
+Open the page, expand **Imported sources**, and choose **Connect Google Drive**.
+Google's own sign-in and file picker appear; pick one or more documents and the
+import runs, showing what it has actually done rather than a made-up percentage.
+Imported documents are listed with what each contributed, and each can be removed
+after a confirmation that says how many sentences it will take out of results.
+Removing a document does not touch the file in Drive.
+
+### What it will and will not do
+
+- **Only the files you pick are ever read.** The single scope requested,
+  `drive.file`, covers files opened through the picker and nothing else; it is
+  non-sensitive and needs no Google verification. There is no code anywhere in the
+  feature that lists or searches a Drive.
+- **Only `.txt` files and Google Docs.** PDFs, images, spreadsheets and
+  presentations are refused before anything is downloaded.
+- **The authorization lasts as long as the tab.** No token is written to disk or
+  to browser storage, and no refresh token is requested, so a reload means
+  connecting again.
+- **A Google Doc has paragraphs, not lines**, so one paragraph becomes one
+  searchable sentence.
+
+### Where it puts things, and how to remove them
+
+Imported text and the index over it live in `.drive-data` beside `config.yaml`,
+which git ignores. `rm -rf .drive-data` removes everything imported and returns
+the server to searching the corpus alone. Setting `HEN_DRIVE_ENABLED=false`, or
+deleting `.env`, hides the feature entirely.
 
 ## Benchmarks
 
@@ -301,6 +392,7 @@ engine's order and are not re-ranked anywhere. Design decisions are recorded in
 python -m benchmarks            # measure the configured corpus against the gates
 python -m benchmarks --build    # also time a cold build, in a temporary cache
 python -m benchmarks --json out.json
+python -m benchmarks.drive      # what importing documents costs, separately
 ```
 
 Latency is judged per query class, never on a blended figure, so a slow class
@@ -310,6 +402,11 @@ against 300, a warm start of 0.10 s against 5, a 659 MB cache against 1 GB, and
 typing at a median of 0.83 ms against 10. Full results and the reasoning behind
 the query classes are in
 [docs/design/2026-08-31-m7-benchmark-report.md](docs/design/2026-08-31-m7-benchmark-report.md).
+
+`python -m benchmarks.drive` measures the optional Drive import separately, and is
+deliberately outside those gates: they describe the corpus search, and an optional
+feature must not be able to spend their budget. It involves no network, so what it
+reports is this project's own cost rather than Google's latency.
 
 The search tests check every answer against one computed directly: suffix order
 against Python's own sort of the suffixes, ranges against a scan for the
@@ -360,7 +457,14 @@ autocomplete/       production package
   engine.py         answering queries: the score-tier walk
   cli.py            the interactive completion loop
   cache.py          storing and validating a built index
+  composite.py      searching a base index and an overlay as one ranking
   reference.py      slow brute-force engine used to define correctness
+autocomplete/drive/ the optional Google Drive import (off unless configured)
+  settings.py       what the feature may do, read from the environment
+  client.py         the only code that speaks to Google
+  documents.py      a Drive file turned into validated corpus text
+  store.py          the imported corpus and its atomically published index
+  jobs.py           the import and removal lifecycle
 autocomplete/web/   the optional HTTP API over the engine
 benchmarks/         the performance harness and its gates
 docs/design/        design review and decision records
