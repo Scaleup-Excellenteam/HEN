@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ImportedSources } from "./components/ImportedSources";
 import { Wordmark } from "./components/Logo";
 import { ResultList } from "./components/ResultList";
 import { SearchField } from "./components/SearchField";
 import { StatusPanel } from "./components/StatusPanel";
+import { useDrive } from "./drive/useDrive";
 import { useCompletions } from "./hooks/useCompletions";
 import { useHealth } from "./hooks/useHealth";
 import type { Completion } from "./types";
@@ -11,6 +13,7 @@ export default function App() {
   const [query, setQuery] = useState("");
   const { state: health, recheck } = useHealth();
   const { state: search, search: searchNow, searchSoon, reset } = useCompletions();
+  const drive = useDrive();
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
@@ -65,9 +68,17 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [focusInput]);
 
+  // The imported documents are searched alongside the corpus, so the one line
+  // that says what is being searched counts both. With nothing imported the
+  // numbers are the corpus's own and the line reads exactly as it did before.
+  const totalSentences =
+    (health.kind === "ready" ? (health.health.sentences ?? 0) : 0) +
+    (drive.status?.sentences ?? 0);
+  const totalSources =
+    (health.kind === "ready" ? (health.health.sources ?? 0) : 0) + drive.documents.length;
   const corpusSize =
     backendReady && health.health.sentences
-      ? `${health.health.sentences.toLocaleString()} sentences from ${health.health.sources?.toLocaleString()} files`
+      ? `${totalSentences.toLocaleString()} sentences from ${totalSources.toLocaleString()} files`
       : null;
 
   return (
@@ -163,6 +174,9 @@ export default function App() {
                 results={search.results}
                 onAccept={accept}
                 onLeaveTop={focusInput}
+                importedPrefix={
+                  drive.documents.length > 0 ? (drive.status?.source_prefix ?? "") : ""
+                }
               />
             )}
 
@@ -201,6 +215,10 @@ export default function App() {
             )}
           </>
         )}
+
+        {/* Renders nothing at all unless the server offers the feature, so a
+            deployment without it looks exactly as it did before. */}
+        <ImportedSources drive={drive} />
       </div>
     </div>
   );
