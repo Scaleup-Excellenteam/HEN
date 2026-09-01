@@ -307,3 +307,93 @@ class TestScoresAreIndexIndependent:
             left = find_completions(as_base, query)
             right = find_completions(as_overlay, query)
             assert [item.score for item in left] == [item.score for item in right]
+
+
+class TestTheExactTierShortcut:
+    """The shortcut that settles a query without enumerating any repair.
+
+    Its correctness is already implied by the differential suite, which compares
+    complete answers against a brute-force ranker. These pin it directly, so a
+    fault in it is reported as itself rather than as a mismatch somewhere.
+    """
+
+    def test_it_answers_exactly_as_the_full_walk_would(self, tmp_path):
+        base_files = {"corpus.txt": [f"the quick brown thing {n}" for n in range(8)]}
+        drive_files = {"Google Drive/d.txt": [f"the quick brown other {n}" for n in range(8)]}
+        base = build(tmp_path, "b", base_files)
+        overlay = build(tmp_path, "o", drive_files)
+
+        for query in ["the quick brown", "the quick", "brown", "quick brown other"]:
+            shortcut = composite.search(base, overlay, query)
+            full = composite.merge(
+                [
+                    find_completions(base, query, K),
+                    find_completions(overlay, query, K),
+                ],
+                limit=K,
+            )
+            same(shortcut, full)
+            same(shortcut, oracle(query, base_files, drive_files))
+
+    def test_it_takes_the_shortcut_when_the_exact_tier_fills(self, tmp_path, monkeypatch):
+        """No repair may be enumerated when K exact matches already exist: that
+        is the whole point, and it is what keeps typing as cheap as it was."""
+        base_files = {"corpus.txt": [f"exact match {n}" for n in range(8)]}
+        drive_files = {"Google Drive/d.txt": ["exact match imported"]}
+        base = build(tmp_path, "b", base_files)
+        overlay = build(tmp_path, "o", drive_files)
+
+        import autocomplete.engine as engine
+
+        monkeypatch.setattr(
+            engine,
+            "_fuzzy_tiers",
+            lambda query: pytest.fail("repairs were enumerated for an exact answer"),
+        )
+        assert len(composite.search(base, overlay, "exact match")) == K
+
+    def test_it_does_not_take_the_shortcut_when_the_exact_tier_cannot_fill(
+        self, tmp_path
+    ):
+        base_files = {"corpus.txt": ["only one exact", "a near mist"]}
+        drive_files = {"Google Drive/d.txt": ["another near mise"]}
+        base = build(tmp_path, "b", base_files)
+        overlay = build(tmp_path, "o", drive_files)
+        # Neither line contains "near miss", and each is one substitution away
+        # from it, so the shortcut cannot fill and the repair walk must run.
+        results = composite.search(base, overlay, "near miss")
+        assert len(results) == 2
+        same(results, oracle("near miss", base_files, drive_files))
+
+    def test_an_exact_match_only_in_the_overlay_still_wins_its_place(self, tmp_path):
+        base_files = {"corpus.txt": [f"zzz filler {n}" for n in range(8)]}
+        drive_files = {"Google Drive/d.txt": ["shared phrase here"]}
+        base = build(tmp_path, "b", base_files)
+        overlay = build(tmp_path, "o", drive_files)
+        results = composite.search(base, overlay, "shared phrase")
+        assert results[0].source_text == "Google Drive/d.txt"
+        same(results, oracle("shared phrase", base_files, drive_files))
+
+    def test_the_shortcut_respects_a_lowered_limit(self, tmp_path):
+        base_files = {"corpus.txt": [f"exact match {n}" for n in range(8)]}
+        drive_files = {"Google Drive/d.txt": ["exact match imported"]}
+        base = build(tmp_path, "b", base_files)
+        overlay = build(tmp_path, "o", drive_files)
+        for limit in (1, 2, 3, 4, 5):
+            results = composite.search(base, overlay, "exact match", limit)
+            assert len(results) == limit
+            same(results, oracle("exact match", base_files, drive_files, k=limit))
+
+    def test_a_query_that_normalizes_away_is_still_empty(self, base, overlay):
+        for query in ["", "   ", "!!!", "\t"]:
+            assert composite.search(base, overlay, query) == []
+
+    def test_no_repair_can_reach_the_exact_score(self):
+        """The premise the shortcut rests on, checked against the scoring table
+        rather than assumed."""
+        from autocomplete.scoring import exact_score, repair_tiers
+
+        for length in range(2, 12):
+            query = b"a" * length
+            best_repair = max(tier.score for tier in repair_tiers(query))
+            assert best_repair < exact_score(length), length

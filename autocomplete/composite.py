@@ -55,6 +55,34 @@ Records are *not* deduplicated across indexes. That matches what the project
 already does within one corpus, where two files holding the same sentence give
 two results (see :func:`autocomplete.reference.find_best_k`), and it is what
 keeps each result's own source and line number meaningful.
+
+Settling a query without walking any repairs
+--------------------------------------------
+
+The engine already stops before considering a single repair when the query
+itself occurs in K sentences, which is what makes typing cheap. Searching two
+indexes separately loses that: a small overlay almost never has K matches of
+its own, so it would walk the entire repair ladder on every keystroke while the
+corpus was answering from the exact tier alone. Measured, that cost more than
+the whole rest of the search.
+
+So the exact tier is taken from both indexes first. If the two together supply K
+matches, that is the answer, and no repair is enumerated anywhere:
+
+    Every exact match scores ``2m`` for a query of m characters, and every
+    repair scores strictly less. A substitution keeps ``m - 1`` characters and
+    pays at least 1, an extra character keeps ``m - 1`` and pays at least 2, an
+    omission keeps ``m`` and pays at least 2; so no repair can reach ``2m``.
+    With K matches already at ``2m``, nothing scoring less can enter the top K,
+    whichever index it is in.
+
+    That K of them are the *right* K follows from the same subset argument as
+    above, applied to the exact matches alone: the K best exact matches of the
+    union lie within the K best of each index.
+
+When the two together cannot supply K, repairs are needed and the full walk runs
+on both indexes, exactly as before. The extra cost in that case is two suffix
+lookups, which is nothing beside enumerating the repairs that follow.
 """
 
 from __future__ import annotations
@@ -62,7 +90,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 
 from .data import AutoCompleteData
-from .engine import find_completions
+from .engine import exact_completions, find_completions
 from .index import SearchIndex
 
 __all__ = ["merge", "search"]
@@ -96,6 +124,22 @@ def search(
         return find_completions(base, query, limit)
 
     wanted = base.summary_width if limit is None else limit
+    if wanted < 1:
+        return []
+
+    # The exact tier first, from both. When it fills, every result scores the
+    # maximum a query of this length can earn and no repair could displace one,
+    # so the answer is settled without enumerating any.
+    settled = merge(
+        [
+            exact_completions(base, query, wanted),
+            exact_completions(overlay, query, wanted),
+        ],
+        limit=wanted,
+    )
+    if len(settled) == wanted:
+        return settled
+
     return merge(
         [
             find_completions(base, query, wanted),

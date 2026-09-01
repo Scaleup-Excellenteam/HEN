@@ -13,6 +13,11 @@
 #   ./run.sh --help
 #
 # The command line, python main.py, needs none of this.
+#
+# Optional Google Drive import is configured in a .env file beside this script,
+# which is read if it exists. Without one the feature is simply off and nothing
+# else is affected; see .env.example. Nothing here performs or triggers any
+# Google authorization: that happens in the browser, when someone asks for it.
 
 set -euo pipefail
 
@@ -23,6 +28,7 @@ API_PORT=8000
 DEV_PORT=5173
 PREVIEW_PORT=4173
 LOG_DIR="$ROOT/.run"
+ENV_FILE="$ROOT/.env"
 
 MODE="serve"       # serve | dev | stop
 REBUILD_INDEX=0
@@ -129,6 +135,34 @@ PY
 [[ -d "$CORPUS" ]] || fail "the corpus directory does not exist: ${CORPUS}
        Set corpus_root in config.yaml to the extracted text files."
 info "corpus ${CORPUS}"
+
+# Optional Google Drive import. Read the file if it is there and export what it
+# sets, so the API server inherits it; say whether the feature is on, and never
+# echo a value. A missing file is a normal state, not an error.
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090,SC1091  # the path is this script's own directory
+  source "$ENV_FILE"
+  set +a
+fi
+
+DRIVE_STATUS="$("$PYTHON" - <<'DRIVEPROBE'
+from autocomplete.drive.settings import DriveSettings, DriveSettingsError
+
+try:
+    settings = DriveSettings.from_environment()
+except DriveSettingsError as problem:
+    print(f"misconfigured: {problem}")
+else:
+    if settings.configured:
+        print("enabled")
+    elif settings.enabled:
+        print(settings.describe_missing())
+    else:
+        print("disabled (set HEN_DRIVE_ENABLED=true in .env to offer it)")
+DRIVEPROBE
+)" || DRIVE_STATUS="disabled (its settings could not be read)"
+info "drive import ${DRIVE_STATUS}"
 
 # ------------------------------------------------------------------ build ---
 

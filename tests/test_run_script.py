@@ -87,3 +87,42 @@ class TestArguments:
         result = run(script, "--wat")
         assert "Stopping" not in result.stdout
         assert "Installing" not in result.stdout
+
+
+class TestDriveImportIsOptional:
+    """The launcher must work without Google configuration, and say so."""
+
+    def test_it_documents_the_optional_feature(self, script):
+        printed = run(script, "--help").stdout
+        assert ".env" in printed
+        assert "Google Drive" in printed
+
+    def test_the_help_says_it_performs_no_authorization(self, script):
+        assert "authorization" in run(script, "--help").stdout
+
+    def test_it_reads_a_dot_env_file_rather_than_requiring_one(self, script):
+        text = script.read_text()
+        assert 'if [[ -f "$ENV_FILE" ]]; then' in text, (
+            "a missing .env must be a normal state, not a failure"
+        )
+
+    def test_it_reports_whether_drive_import_is_enabled(self, script):
+        assert "drive import" in script.read_text()
+
+    def test_it_holds_no_credentials(self, script):
+        text = script.read_text()
+        for marker in ("apps.googleusercontent.com", "AIza", "client_secret"):
+            assert marker not in text
+
+    def test_it_never_echoes_a_configured_value(self, script):
+        """The status line reports enabled or disabled, never what was set."""
+        text = script.read_text()
+        for variable in ("HEN_DRIVE_CLIENT_ID", "HEN_DRIVE_API_KEY", "HEN_DRIVE_APP_ID"):
+            assert f"${{{variable}}}" not in text
+            assert f"${variable}" not in text
+
+    def test_it_quotes_every_path_it_expands(self, script):
+        """The repository path can hold spaces and non-ASCII characters."""
+        text = script.read_text()
+        for unquoted in ("cd $ROOT", "source $ENV_FILE", "-f $ENV_FILE"):
+            assert unquoted not in text
