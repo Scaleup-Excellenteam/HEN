@@ -8,11 +8,15 @@
 #   ./run.sh                 build everything and serve the built interface
 #   ./run.sh --dev           serve the interface from the development server
 #   ./run.sh --stop          stop whatever is running and exit
-#   ./run.sh --rebuild-index discard the cached index and build it again
+#   ./run.sh --rebuild-index discard the cached index and build it again first
 #   ./run.sh --skip-install  trust the installed dependencies
 #   ./run.sh --help
 #
 # The command line, python main.py, needs none of this.
+#
+# The search index is prepared by the API after it starts, not before, so the
+# page opens straight away and shows the preparation as it happens. Searching
+# stays unavailable until a complete index has been published.
 
 set -euo pipefail
 
@@ -145,13 +149,18 @@ else
   step "Skipping dependency installation"
 fi
 
-step "Preparing the search index"
+# The index is NOT prepared here. The API prepares it in the background when it
+# starts, and reports what it is doing, so the browser can show the preparation
+# as it happens instead of watching a blank terminal for seventeen seconds and
+# then getting a page. A warm start is unaffected: the cached index still loads
+# in well under a second, and the page simply becomes usable that much sooner.
+#
+# --rebuild-index is the exception. Discarding a valid index is a deliberate,
+# destructive act, so it stays in the foreground where its output is visible and
+# where a failure stops the launch rather than being reported inside a web page.
 if [[ "$REBUILD_INDEX" -eq 1 ]]; then
+  step "Rebuilding the search index"
   "$PYTHON" main.py --rebuild | sed 's/^/    /'
-else
-  # build_or_load reuses a cached index only while the corpus fingerprint still
-  # matches, so this is a full build whenever anything has changed.
-  "$PYTHON" main.py --build | sed 's/^/    /'
 fi
 
 mkdir -p "$LOG_DIR"
@@ -205,7 +214,8 @@ info "open        http://localhost:${WEB_PORT}"
 info "API         http://127.0.0.1:${API_PORT}/api/health"
 info "logs        ${LOG_DIR#$ROOT/}/api.log, ${LOG_DIR#$ROOT/}/web.log"
 if [[ "$READY" != "true" ]]; then
-  info "the index is still being prepared; the page will start working on its own"
+  info "the index is still being prepared; the page shows it happening and"
+  info "starts working on its own when it finishes"
 fi
 info "press Ctrl-C to stop, or run ./run.sh --stop from another terminal"
 

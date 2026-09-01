@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useBuildProgress } from "./build/useBuildProgress";
 import { Wordmark } from "./components/Logo";
+import { PreparationScreen } from "./components/PreparationScreen";
 import { ResultList } from "./components/ResultList";
 import { SearchField } from "./components/SearchField";
 import { StatusPanel } from "./components/StatusPanel";
+import { SystemStatus } from "./components/SystemStatus";
 import { useCompletions } from "./hooks/useCompletions";
 import { useHealth } from "./hooks/useHealth";
 import type { Completion } from "./types";
@@ -10,12 +13,22 @@ import type { Completion } from "./types";
 export default function App() {
   const [query, setQuery] = useState("");
   const { state: health, recheck } = useHealth();
+  const { state: build, retry: retryBuild } = useBuildProgress();
   const { state: search, search: searchNow, searchSoon, reset } = useCompletions();
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
 
   const backendReady = health.kind === "ready";
+
+  // While the server is preparing, the whole page is the preparation screen.
+  // It is shown only on the server's own word: the state below comes from
+  // /api/build, so nothing appears before there is something real to report,
+  // and a warm start passes through it too quickly to be seen rather than
+  // being held open to show it off.
+  const preparing =
+    build.kind === "watching" &&
+    (build.status.state === "preparing" || build.status.state === "failed");
   // Before the first search the page is one centred prompt; afterwards the
   // field moves up and the sentences take the space.
   const working =
@@ -69,6 +82,10 @@ export default function App() {
     backendReady && health.health.sentences
       ? `${health.health.sentences.toLocaleString()} sentences from ${health.health.sources?.toLocaleString()} files`
       : null;
+
+  if (preparing && build.kind === "watching") {
+    return <PreparationScreen status={build.status} onRetry={retryBuild} />;
+  }
 
   return (
     <div className="min-h-dvh bg-page">
@@ -201,6 +218,11 @@ export default function App() {
             )}
           </>
         )}
+
+        {/* How the system started, once it has. Closed by default: after
+            readiness this is something to be able to check, not something to
+            keep occupying the screen. */}
+        {build.kind === "watching" && <SystemStatus status={build.status} />}
       </div>
     </div>
   );

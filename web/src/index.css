@@ -16,6 +16,23 @@
   --color-page-sunken: #f6f7f9;
   --color-hairline: #e3e6ea;
 
+  /* The preparation screen only. It is the one surface that is not the search
+     interface: a pre-flight view shown before the product is usable, so it is
+     given its own ground rather than pretending to be the page it precedes.
+     The four accents are the same ones, lifted for contrast on a dark field,
+     so it reads as this product in a different mode and not another product.
+     Every pairing below meets WCAG AA against --color-deck. */
+  --color-deck: #0b1020;
+  --color-deck-raised: #141a2e;
+  --color-deck-line: #263049;
+  --color-deck-ink: #f2f5fb;
+  --color-deck-soft: #a8b3ca;
+  --color-deck-faint: #7b87a0;
+  --color-deck-blue: #7aa7ff;
+  --color-deck-red: #ff8a80;
+  --color-deck-amber: #ffca5f;
+  --color-deck-green: #6fdc9a;
+
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
@@ -46,6 +63,48 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* The star field behind the preparation screen: two layers of static points,
+   drawn with gradients so they cost no requests and no elements. It never
+   moves, in any motion setting, because it carries no information and motion
+   behind text that is being read is a cost with no benefit. */
+.starfield {
+  background-image:
+    radial-gradient(1px 1px at 12% 22%, rgb(255 255 255 / 0.55), transparent 100%),
+    radial-gradient(1px 1px at 78% 14%, rgb(255 255 255 / 0.45), transparent 100%),
+    radial-gradient(1px 1px at 34% 68%, rgb(255 255 255 / 0.4), transparent 100%),
+    radial-gradient(1px 1px at 62% 82%, rgb(255 255 255 / 0.35), transparent 100%),
+    radial-gradient(1px 1px at 88% 56%, rgb(255 255 255 / 0.3), transparent 100%),
+    radial-gradient(1px 1px at 22% 88%, rgb(255 255 255 / 0.3), transparent 100%),
+    radial-gradient(1px 1px at 52% 34%, rgb(255 255 255 / 0.25), transparent 100%),
+    radial-gradient(1px 1px at 8% 54%, rgb(255 255 255 / 0.25), transparent 100%),
+    radial-gradient(1px 1px at 94% 30%, rgb(255 255 255 / 0.2), transparent 100%),
+    radial-gradient(900px 500px at 50% -10%, rgb(37 99 235 / 0.16), transparent 70%);
+}
+
+/* An indeterminate bar: a band that traverses the track, saying "working"
+   without claiming a position. Under reduced motion the band is replaced by a
+   still, half-width marker and the phase text alone reports activity. */
+.indeterminate-band {
+  animation: indeterminate-sweep 1.6s ease-in-out infinite;
+}
+
+@keyframes indeterminate-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .indeterminate-band {
+    animation: none;
+    transform: translateX(120%);
+    opacity: 0.85;
   }
 }
 
