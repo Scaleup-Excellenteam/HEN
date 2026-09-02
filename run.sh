@@ -146,12 +146,14 @@ else
 fi
 
 step "Preparing the search index"
+# PYTHONUNBUFFERED keeps the progress lines coming as the build makes them:
+# through a pipe Python would otherwise hold them until it exits.
 if [[ "$REBUILD_INDEX" -eq 1 ]]; then
-  "$PYTHON" main.py --rebuild | sed 's/^/    /'
+  PYTHONUNBUFFERED=1 "$PYTHON" main.py --rebuild | sed 's/^/    /'
 else
   # build_or_load reuses a cached index only while the corpus fingerprint still
   # matches, so this is a full build whenever anything has changed.
-  "$PYTHON" main.py --build | sed 's/^/    /'
+  PYTHONUNBUFFERED=1 "$PYTHON" main.py --build | sed 's/^/    /'
 fi
 
 mkdir -p "$LOG_DIR"
