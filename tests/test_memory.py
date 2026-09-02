@@ -81,3 +81,22 @@ class TestFormatting:
     def test_describe_on_this_machine_names_a_size(self):
         if SUPPORTED:
             assert "GB" in memory.describe()
+
+
+class TestWithoutTheResourceModule:
+    """``resource`` is a Unix interface and simply absent on Windows.
+
+    Importing it unconditionally took the command line down with it, since
+    `autocomplete.cli` imports this module at the top level, so the whole
+    program failed to start rather than losing one reading.
+    """
+
+    def test_the_peak_is_unknown_rather_than_an_error(self, monkeypatch):
+        monkeypatch.setattr(memory, "resource", None)
+        assert memory.peak_bytes() is None
+
+    def test_the_description_still_renders(self, monkeypatch):
+        monkeypatch.setattr(memory, "resource", None)
+        described = memory.describe()
+        assert "peak" not in described
+        assert described  # never empty, whatever the platform can supply

@@ -6,17 +6,23 @@ touch more of the suffix array. There is no portable way to read that, so each
 platform is handled separately and anything unrecognised reports ``None``
 rather than a wrong number.
 
-Peak resident size comes from :func:`resource.getrusage`, which is available
-everywhere the program runs and needs no platform code.
+Peak resident size comes from :func:`resource.getrusage`, which needs no
+platform code but is a Unix interface: Windows has no ``resource`` module at
+all, so the import is optional and the peak is simply one more reading this
+platform cannot supply.
 """
 
 from __future__ import annotations
 
 import ctypes
 import os
-import resource
 import sys
 from pathlib import Path
+
+try:
+    import resource
+except ImportError:  # Windows: a Unix-only module, and the only user of it
+    resource = None
 
 __all__ = ["describe", "format_gb", "peak_bytes", "resident_bytes"]
 
@@ -43,6 +49,8 @@ def peak_bytes() -> int | None:
     wrong is a factor of a thousand, so it is decided by platform rather than
     guessed from the magnitude.
     """
+    if resource is None:
+        return None
     try:
         raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     except (OSError, ValueError):  # pragma: no cover - not seen in practice
