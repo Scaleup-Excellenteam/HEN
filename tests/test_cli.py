@@ -7,7 +7,7 @@ import io
 import pytest
 
 from autocomplete import cli
-from autocomplete.cli import READY_MESSAGE, format_suggestions
+from autocomplete.cli import READY_MESSAGE, format_stats, format_suggestions
 from autocomplete.data import AutoCompleteData
 from autocomplete.index import SearchIndex
 
@@ -28,10 +28,12 @@ def write_corpus(root, files: dict[str, bytes]):
     return root
 
 
-def session(index, typed: str, limit: int | None = None) -> str:
+def session(
+    index, typed: str, limit: int | None = None, stats: bool = False
+) -> str:
     """Run the loop over scripted input and return everything it printed."""
     output = io.StringIO()
-    cli.run(index, io.StringIO(typed), output, limit)
+    cli.run(index, io.StringIO(typed), output, limit, stats=stats)
     return output.getvalue()
 
 
@@ -228,3 +230,43 @@ class TestInputEcho:
         output = io.StringIO()
         cli.run(varied_index, Bare("alpha\n"), output)
         assert "\nalpha\n" in output.getvalue()
+
+
+class TestStats:
+    """``--stats`` adds a timing and memory line under each result set.
+
+    It is off by default because the session without it is the assignment's
+    transcript, checked byte for byte above.
+    """
+
+    def test_nothing_is_added_unless_asked_for(self, demo_index):
+        assert "found in" not in session(demo_index, "this is\n")
+
+    def test_a_timing_line_follows_the_suggestions(self, demo_index):
+        printed = session(demo_index, "this is\n", stats=True)
+        assert "Here are 5 suggestions:" in printed
+        assert "found in" in printed
+        assert printed.index("5. Omega") < printed.index("found in")
+
+    def test_every_search_is_timed(self, varied_index):
+        printed = session(varied_index, "alpha\nbravo\n", stats=True)
+        assert printed.count("found in") == 2
+
+    def test_a_search_that_found_nothing_is_still_timed(self, varied_index):
+        printed = session(varied_index, "zzqqxx\n", stats=True)
+        assert "No suggestions found." in printed
+        assert "found in" in printed
+
+    def test_a_reset_is_not_a_search(self, varied_index):
+        assert "found in" not in session(varied_index, "#\n", stats=True)
+
+    def test_the_line_reports_milliseconds(self):
+        assert format_stats(0.0031).startswith("   found in 3.1 ms")
+
+    def test_the_line_reports_memory_when_it_can_be_read(self, monkeypatch):
+        monkeypatch.setattr(cli.memory, "resident_bytes", lambda: 1_810_000_000)
+        assert format_stats(0.0031) == "   found in 3.1 ms | memory 1.81 GB\n"
+
+    def test_memory_is_left_out_rather_than_guessed(self, monkeypatch):
+        monkeypatch.setattr(cli.memory, "resident_bytes", lambda: None)
+        assert format_stats(0.0031) == "   found in 3.1 ms\n"

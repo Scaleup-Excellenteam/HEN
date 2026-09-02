@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from autocomplete import __version__, cli
+from autocomplete import __version__, cli, memory
 from autocomplete.cache import POINTER_FILE, build_or_load
 from autocomplete.config import DEFAULT_CONFIG_FILENAME, Config, ConfigError
 from autocomplete.corpus import CorpusNotFoundError
@@ -45,6 +45,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--rebuild",
         action="store_true",
         help="rebuild the index even when the cached one is still valid",
+    )
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help=(
+            "print how long each search took and how much memory is held, "
+            "under its results"
+        ),
     )
     parser.add_argument(
         "--version",
@@ -98,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{index.block_size}, {index.summary_width} records each"
     )
     print(f"cache directory  : {_describe_cache(config.cache_dir)}")
+    print(f"memory in use    : {memory.describe()}")
     print(f"ready in         : {elapsed:.1f}s")
 
     if args.build or args.rebuild:
@@ -105,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print()
     try:
-        cli.run(index, sys.stdin, sys.stdout)
+        cli.run(index, sys.stdin, sys.stdout, stats=args.stats)
     except KeyboardInterrupt:
         print()
     return 0

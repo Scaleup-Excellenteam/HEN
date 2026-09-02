@@ -57,6 +57,11 @@ class TestArgumentParsing:
     def test_rebuild_flag_is_recognised(self):
         assert entrypoint.build_parser().parse_args(["--rebuild"]).rebuild is True
 
+    def test_stats_defaults_to_off_and_is_recognised(self):
+        parser = entrypoint.build_parser()
+        assert parser.parse_args([]).stats is False
+        assert parser.parse_args(["--stats"]).stats is True
+
     def test_version_flag_prints_the_package_version_and_exits(self, capsys):
         with pytest.raises(SystemExit) as excinfo:
             entrypoint.build_parser().parse_args(["--version"])
@@ -85,6 +90,16 @@ class TestMainBuildOnly:
         assert "sentences" in printed
         assert "ready in" in printed
         assert str(corpus_root) in printed
+
+    def test_the_summary_reports_memory_use(self, tmp_path, capsys):
+        """Printed whether or not --stats was passed: it describes the index
+        that was just prepared, not a search."""
+        corpus_root = write_corpus(tmp_path / "corpus")
+        config_path = write_config(tmp_path, corpus_root, tmp_path / ".cache")
+
+        entrypoint.main(["--config", str(config_path), "--build"])
+
+        assert "memory in use    :" in capsys.readouterr().out
 
     def test_build_actually_writes_a_cache(self, tmp_path):
         corpus_root = write_corpus(tmp_path / "corpus")

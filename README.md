@@ -42,9 +42,25 @@ pip install -r requirements-dev.txt
 python main.py             # prepare the index, then take queries
 python main.py --build     # prepare the index, then exit
 python main.py --rebuild   # prepare it again even if the cache is current
+python main.py --stats     # also time each search and report memory held
 python main.py --help      # options
 pytest                     # run the test suite
 ```
+
+The summary printed once the index is ready reports how much memory the process
+holds. `--stats` adds a line under each result set with how long that search
+took and how much memory is resident afterwards; with a memory-mapped index that
+figure climbs over the first few queries and then settles:
+
+```
+Here are 5 suggestions:
+1.               Gont, F., "Security Assessment of the Internet Protocol (rfc7707.txt:1617, score=42)
+...
+   found in 10.4 ms | memory 0.10 GB
+```
+
+Without the flag the session is exactly the transcript below, which is what the
+assignment shows.
 
 Settings live in `config.yaml`; every key is optional and documented in that
 file. Relative paths there resolve against the file's own directory, and so do

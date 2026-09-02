@@ -14,13 +14,21 @@ Entering ``#`` finishes the sentence and starts over with nothing typed.
 
 from __future__ import annotations
 
+import time
 from typing import TextIO
 
+from . import memory
 from .data import AutoCompleteData
 from .engine import find_completions
 from .index import SearchIndex
 
-__all__ = ["READY_MESSAGE", "RESET_CHARACTER", "format_suggestions", "run"]
+__all__ = [
+    "READY_MESSAGE",
+    "RESET_CHARACTER",
+    "format_stats",
+    "format_suggestions",
+    "run",
+]
 
 READY_MESSAGE = "The system is ready. Enter your text:"
 
@@ -37,6 +45,7 @@ def run(
     stream_in: TextIO,
     stream_out: TextIO,
     limit: int | None = None,
+    stats: bool = False,
 ) -> None:
     """Read queries and print completions until the input ends.
 
@@ -46,6 +55,9 @@ def run(
         stream_out: Where the prompt and results are written.
         limit: How many completions to show, defaulting to the number the index
             was built to answer.
+        stats: Print how long each search took, and how much memory the process
+            holds afterwards, under its results. Off by default, so that the
+            session reads exactly as the assignment's worked example does.
     """
     _write(stream_out, f"{READY_MESSAGE}\n")
 
@@ -78,8 +90,15 @@ def run(
         if not typed_so_far.strip():
             continue
 
+        # Timed around the search alone: the time to render and write the
+        # results is the terminal's, not the engine's.
+        started = time.perf_counter()
         results = find_completions(index, typed_so_far, limit)
+        elapsed = time.perf_counter() - started
+
         _write(stream_out, format_suggestions(results))
+        if stats:
+            _write(stream_out, format_stats(elapsed))
 
 
 def format_suggestions(results: list[AutoCompleteData]) -> str:
@@ -94,6 +113,20 @@ def format_suggestions(results: list[AutoCompleteData]) -> str:
     )
     lines = [f"{position}. {result}" for position, result in enumerate(results, 1)]
     return "\n".join([heading, *lines]) + "\n"
+
+
+def format_stats(seconds: float) -> str:
+    """Render the timing and memory line printed under a result set.
+
+    Memory is read after the search, so it reflects the pages that search made
+    resident: with a memory-mapped index the figure climbs over the first few
+    queries and then settles.
+    """
+    line = f"   found in {seconds * 1000:.1f} ms"
+    resident = memory.resident_bytes()
+    if resident is not None:
+        line += f" | memory {memory.format_gb(resident)}"
+    return f"{line}\n"
 
 
 def _is_reset(entry: str) -> bool:
