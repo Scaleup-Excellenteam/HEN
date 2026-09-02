@@ -6,14 +6,24 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         # Oldest supported version and two current ones. Installing the full
         # runtime requirements here also validates numpy/pydivsufsort wheel
         # availability early (design review ss7).
+        os: [ubuntu-latest]
         python-version: ["3.10", "3.12", "3.13"]
+        include:
+          # The program supports Linux, macOS and Windows. What differs between
+          # them is the cache's durable-write path and reading memory use, and
+          # neither varies by interpreter version, so one Python each is enough
+          # to catch a regression there without tripling the matrix.
+          - os: macos-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.13"
 
     steps:
       - uses: actions/checkout@v4

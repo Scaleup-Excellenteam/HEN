@@ -1,3 +1,8 @@
 # Fixture corpora are byte-exact test inputs: never translate line endings,
 # otherwise normalization and hashing tests differ across platforms.
 tests/fixtures/** -text
+
+# Shell scripts must keep Unix endings wherever they are checked out: a Windows
+# clone that translated them would hand CRLF to bash, which reads the carriage
+# return as part of the command and fails on the first line.
+*.sh text eol=lf

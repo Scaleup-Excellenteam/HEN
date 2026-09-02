@@ -31,9 +31,13 @@ python -c "from autocomplete.suffix_index import verify_builder; verify_builder(
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 ```
+
+Linux, macOS and Windows are all supported and tested in CI. The `.sh` scripts
+below need a Unix shell, so on Windows use the individual `python` commands
+they wrap, shown under [Running it](#running-it).
 
 ## Usage
 
@@ -231,6 +235,9 @@ One command builds everything and starts it:
 ```bash
 ./run.sh
 ```
+
+It needs a Unix shell, so it covers Linux and macOS; on Windows run the
+individual commands at the end of this section instead.
 
 It installs dependencies, prepares the search index, builds the interface, and
 starts both servers, then prints where to open it (<http://localhost:4173>).
