@@ -44,6 +44,7 @@ __all__ = [
     "MANIFEST_FILE",
     "POINTER_FILE",
     "build_or_load",
+    "build_or_load_current",
     "current_generation_name",
     "load",
     "load_current",
@@ -272,6 +273,28 @@ def build_or_load(
     log: Logger | None = None,
 ) -> SearchIndex:
     """Return a ready index, reusing the cache when it is still valid."""
+    index, _ = build_or_load_current(
+        config, force_rebuild=force_rebuild, block_size=block_size, log=log
+    )
+    return index
+
+
+def build_or_load_current(
+    config: Config,
+    *,
+    force_rebuild: bool = False,
+    block_size: int = DEFAULT_BLOCK_SIZE,
+    log: Logger | None = None,
+) -> tuple[SearchIndex, str]:
+    """Like :func:`build_or_load`, but also name the generation it settled on.
+
+    A caller that has to label what it is serving must not read the pointer
+    again afterwards: another process can publish in between the load and that
+    read, and the label would then name a generation this process never
+    loaded. Both paths here report the generation they actually produced, the
+    one :func:`load_current` resolved or the one :func:`save` just wrote, so
+    the name can never disagree with the index it describes.
+    """
     announce = log or (lambda message: None)
 
     corpus_hash: str | None = None
@@ -280,7 +303,7 @@ def build_or_load(
 
     if not force_rebuild:
         try:
-            index = load(
+            index, generation = load_current(
                 config.cache_dir,
                 corpus_hash=corpus_hash,
                 level=config.validation_level,
@@ -292,7 +315,7 @@ def build_or_load(
             announce(f"building the index ({reason})")
         else:
             announce(f"loaded {len(index)} records from cache")
-            return index
+            return index, generation
     else:
         announce("building the index (rebuild requested)")
 
@@ -304,9 +327,9 @@ def build_or_load(
         block_size=block_size,
         log=announce,
     )
-    generation = save(index, config.cache_dir, corpus_hash)
-    announce(f"wrote generation {generation.name}")
-    return index
+    generation_dir = save(index, config.cache_dir, corpus_hash)
+    announce(f"wrote generation {generation_dir.name}")
+    return index, generation_dir.name
 
 
 def _current_generation(cache_dir: Path) -> Path:

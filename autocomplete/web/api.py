@@ -24,11 +24,14 @@ new one. The reported generation always names what was actually loaded:
 ``load_current`` reads the pointer once and returns the index and its
 generation name together, so the two can never disagree even if another
 generation is published in between the cheap pointer check and the real load.
-A generation that fails validation, a stale format version, a corpus hash that
-no longer matches, a damaged file, is skipped rather than adopted, so a bad
-build can never interrupt a service that is already running; that same
-generation name is then not retried on later ticks, because every reason
-validation fails is permanent, until the pointer names something new.
+A generation that fails validation, a stale format version, a truncated or
+missing artifact, is skipped rather than adopted, so a bad build can never
+interrupt a service that is already running; that same generation name is then
+not retried on later ticks, because every reason validation fails is permanent,
+until the pointer names something new. What a refresh validates is the
+generation's own integrity and never the corpus fingerprint, which is the
+*builder's* invariant: a published index is self-contained and never reads
+``corpus_root`` again.
 """
 
 from __future__ import annotations
@@ -158,12 +161,19 @@ class EngineState:
 
         def work() -> None:
             try:
-                from ..cache import build_or_load, current_generation_name
+                from ..cache import build_or_load_current
 
                 logger.info("preparing the index from %s", config.corpus_root)
-                index = build_or_load(config)
+                # One read, not two: reading the pointer again to label what was
+                # just loaded lets a build published in between name a generation
+                # this process never adopted, which `refresh` would then treat as
+                # already served and skip for the life of the process.
+                index, generation = build_or_load_current(config)
+                # The generation first: `index` is what publishes the index, and
+                # nothing reports a generation before there is an index to report
+                # it for, so this order leaves no moment with a stale label.
+                self._generation = generation
                 self.index = index
-                self._generation = current_generation_name(config.cache_dir)
                 logger.info("index ready: %d sentences", len(index))
             except Exception as exc:  # reported through /api/health, not raised
                 self.error = f"{type(exc).__name__}: {exc}"
@@ -194,9 +204,9 @@ class EngineState:
 
         A no-op when the pointer still names the generation already serving,
         or the generation that most recently failed validation: every reason
-        :func:`~autocomplete.cache.load_current` rejects a generation (wrong
-        format version, a corpus hash that no longer matches, a truncated
-        file, ...) is permanent, so a generation that failed once will fail
+        :func:`~autocomplete.cache.load_current` rejects a generation *here*
+        (wrong format version, a truncated or missing artifact, ...) is a
+        property of the generation itself, so one that failed once will fail
         identically forever. Retrying it every tick, with no backoff, would
         just repeat the same failing work indefinitely; it is only worth
         trying again once the pointer names something new. The index already
@@ -208,17 +218,23 @@ class EngineState:
         if latest is None or latest in (self._generation, self._failed_generation):
             return
 
-        corpus_hash = None
-        if config.validation_level in ("content", "full"):
-            from .. import corpus
-
-            corpus_hash = corpus.fingerprint(config.corpus_root)
+        # Validate the generation's own integrity, never the corpus fingerprint.
+        # That fingerprint is the *builder's* invariant: `save` recorded the
+        # corpus the index was built from, and the build had already proved the
+        # two agreed. Checking it again here asks a different, moving question,
+        # whether the generation matches *this* process's view of `corpus_root`
+        # right now, and one file landing in the corpus after a build would
+        # answer no for a perfectly good generation. Because a rejection is
+        # remembered, that answer would stick: the generation would be refused
+        # for the life of the process even once the corpus settled back. A
+        # published index is self-contained and never reads `corpus_root`
+        # again, so its own integrity is the only thing left worth checking.
+        level = "full" if config.validation_level == "full" else "structural"
 
         try:
             index, generation = load_current(
                 config.cache_dir,
-                corpus_hash=corpus_hash,
-                level=config.validation_level,
+                level=level,
                 use_mmap=config.use_mmap,
                 summary_width=config.num_results,
             )

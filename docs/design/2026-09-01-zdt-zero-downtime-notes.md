@@ -29,10 +29,22 @@ index is ready. The same background thread that built or loaded the index at
 start-up loops on `Config.refresh_interval` seconds (default 5; `0` disables
 it), calling `cache.current_generation_name(cache_dir)` on each tick, a read of
 one small file, never the index artifacts. When that names a generation the
-process has not adopted, `EngineState.refresh` loads it with the same
-validation `load()` always performs, and republishes it with one attribute
-assignment, `self.index = index`, the same handover already used to publish
-the very first index.
+process has not adopted, `EngineState.refresh` loads it, checking the
+generation's own integrity but deliberately *not* the corpus fingerprint, and
+republishes it with one attribute assignment, `self.index = index`, the same
+handover already used to publish the very first index.
+
+That fingerprint is the offline build's invariant, not the running server's:
+`save` recorded the corpus the index was built from, and the build had already
+proved the two agreed. Asking it again on the online side asks a different and
+moving question, whether the generation matches *this* process's view of
+`corpus_root` at this instant, so a single file landing in the corpus after a
+build would reject a perfectly good generation, permanently, since a rejection
+is remembered. A published index never reads `corpus_root` again, so its own
+integrity is all that is left to check. `validation_level: full` still
+checksums every artifact on refresh; `content` and `structural` both check
+structure, because the content half of `content` is the corpus comparison this
+side has no business making.
 
 That assignment is what makes this zero-downtime rather than merely fast: a
 request already in flight is holding a local reference to whatever `state.index`

@@ -450,6 +450,71 @@ class TestGenerationRefresh:
         time.sleep(0.1)  # give a wrongly-started watcher a chance to appear
         assert not any(t.name == "index-refresh" for t in threading.enumerate())
 
+    def test_prepare_labels_the_generation_it_actually_loaded(self, tmp_path, monkeypatch):
+        """Start-up must not read the pointer a second time to label what it
+        loaded. A build publishing in between those two reads would name a
+        generation this process never adopted, and `refresh` skips whatever
+        `_generation` already names, so the server would serve the older index
+        for the life of the process while reporting the newer name."""
+        from autocomplete import cache as cache_module
+
+        root = write_corpus(tmp_path / "corpus", {"a.txt": DEMO})
+        cache_dir = tmp_path / "cache"
+        real = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+        config = Config(
+            corpus_root=root, cache_dir=cache_dir, num_results=5, refresh_interval=0
+        )
+
+        # Stand in for a build landing between the load and a second pointer
+        # read: any label taken from this could only name what was not loaded.
+        monkeypatch.setattr(
+            cache_module, "current_generation_name", lambda cache_dir: "gen-raced-0000"
+        )
+
+        state = EngineState()
+        state.prepare(config)
+        wait_until_ready(state)
+
+        assert state.generation == real.name
+
+    def test_a_generation_survives_the_corpus_moving_on_after_it_was_built(
+        self, tmp_path
+    ):
+        """The corpus fingerprint is the builder's invariant, not the running
+        server's. A file landing in `corpus_root` after a build must not stop
+        that build from being adopted, and must never get it *permanently*
+        rejected: a published index is self-contained and never reads the
+        corpus again."""
+        root = write_corpus(tmp_path / "corpus", {"a.txt": DEMO})
+        cache_dir = tmp_path / "cache"
+        first = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+        config = Config(corpus_root=root, cache_dir=cache_dir, num_results=5)
+
+        state = EngineState()
+        state.refresh(config)
+        assert state.generation == first.name
+
+        write_corpus(root, {"b.txt": b"A brand new sentence.\n"})
+        second = save(
+            SearchIndex.build(root, summary_width=5), cache_dir, corpus.fingerprint(root)
+        )
+        # Only now does another file land, so the corpus matches neither the
+        # generation being served nor the one just published.
+        write_corpus(root, {"c.txt": b"Landed after the build.\n"})
+
+        state.refresh(config)
+        assert state.generation == second.name
+        assert state._failed_generation is None
+
+        # And the rejection must not have been remembered: with the corpus
+        # settled again there is nothing left to hold the generation back.
+        state.refresh(config)
+        assert state.generation == second.name
+
     def test_health_reports_the_serving_generation(self, index):
         state = EngineState(index=index, _generation="gen-abc123-deadbeef")
         app = create_app(prepare=False)
