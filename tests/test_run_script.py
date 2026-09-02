@@ -14,9 +14,30 @@ import subprocess
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("bash") is None, reason="the script needs bash"
-)
+def usable_bash() -> str | None:
+    """The bash that would actually run the script, or ``None`` if there is none.
+
+    Finding ``bash`` on PATH is not the same as having one. Windows ships a
+    ``bash.exe`` in System32 that only launches WSL, and on a machine with no
+    distribution installed it explains that instead of running anything, so
+    the name resolves while nothing behind it works. Probing it is the only
+    way to tell a usable shell from a placeholder, and a machine with Git for
+    Windows earlier on PATH does have a usable one, which is worth running
+    these against rather than skipping wholesale.
+    """
+    found = shutil.which("bash")
+    if found is None:
+        return None
+    try:
+        probe = subprocess.run([found, "-c", "exit 0"], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return found if probe.returncode == 0 else None
+
+
+BASH = usable_bash()
+
+pytestmark = pytest.mark.skipif(BASH is None, reason="the script needs a working bash")
 
 
 @pytest.fixture(scope="module")
@@ -28,7 +49,7 @@ def script(pytestconfig):
 
 def run(script, *arguments) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(script), *arguments],
+        [BASH, str(script), *arguments],
         capture_output=True,
         text=True,
         cwd=script.parent,
@@ -37,12 +58,16 @@ def run(script, *arguments) -> subprocess.CompletedProcess[str]:
 
 
 class TestTheScriptItself:
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="Windows has no POSIX permission bits for a checkout to carry",
+    )
     def test_is_executable(self, script):
         assert script.stat().st_mode & stat.S_IXUSR, "run.sh should be executable"
 
     def test_is_valid_bash(self, script):
         check = subprocess.run(
-            ["bash", "-n", str(script)], capture_output=True, text=True, timeout=60
+            [BASH, "-n", str(script)], capture_output=True, text=True, timeout=60
         )
         assert check.returncode == 0, check.stderr
 
