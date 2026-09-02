@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -59,6 +60,16 @@ POINTER_FILE = "CURRENT"
 MANIFEST_FILE = "manifest.json"
 _GENERATION_PREFIX = "gen-"
 _POINTER_TEMP_PREFIX = f"{POINTER_FILE}.tmp-"
+
+#: Windows differs from POSIX in what it lets a process do to a file it has
+#: just written, in two places below. Named once, so those places read as the
+#: platform difference they are.
+_IS_WINDOWS = os.name == "nt"
+
+#: How long to keep retrying the pointer rename against a Windows reader
+#: holding the file open, and how long to wait between attempts.
+_POINTER_REPLACE_TIMEOUT = 2.0
+_POINTER_REPLACE_RETRY_DELAY = 0.01
 
 Logger = Callable[[str], None]
 
@@ -404,8 +415,31 @@ def _point_at(cache_dir: Path, generation: str) -> None:
     temporary = cache_dir / f"{_POINTER_TEMP_PREFIX}{os.getpid()}-{uuid.uuid4().hex[:6]}"
     temporary.write_text(f"{generation}\n", encoding="utf-8")
     _flush_file(temporary)
-    os.replace(temporary, cache_dir / POINTER_FILE)
+    _replace_pointer(temporary, cache_dir / POINTER_FILE)
     _flush_directory(cache_dir)
+
+
+def _replace_pointer(temporary: Path, pointer: Path) -> None:
+    """Rename the pointer into place, waiting out a concurrent reader.
+
+    ``os.replace`` is atomic on every platform this runs on, but Windows also
+    requires nothing else to hold the destination open: Python opens files
+    without ``FILE_SHARE_DELETE``, so a reader that happens to be reading
+    ``CURRENT`` in that instant makes the rename fail rather than queue. A
+    long-running web server polls this very file on an interval, so that
+    overlap is rare but expected, and losing an already-built generation to it
+    would be absurd. Retrying briefly outlasts a read of a file this small.
+    POSIX never takes this path: the rename succeeds regardless of readers.
+    """
+    deadline = time.monotonic() + _POINTER_REPLACE_TIMEOUT
+    while True:
+        try:
+            os.replace(temporary, pointer)
+            return
+        except PermissionError:
+            if not _IS_WINDOWS or time.monotonic() >= deadline:
+                raise
+            time.sleep(_POINTER_REPLACE_RETRY_DELAY)
 
 
 def _discard_other_generations(cache_dir: Path, keep: str) -> None:
@@ -445,7 +479,11 @@ def _flush(directory: Path) -> None:
 
 
 def _flush_file(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
+    # Windows flushes through the handle, so it needs one opened for writing;
+    # POSIX fsyncs the file itself and takes any descriptor. These artifacts
+    # were written moments ago, so reopening them read-write always succeeds.
+    flags = os.O_RDWR if _IS_WINDOWS else os.O_RDONLY
+    descriptor = os.open(path, flags)
     try:
         os.fsync(descriptor)
     finally:
@@ -453,7 +491,13 @@ def _flush_file(path: Path) -> None:
 
 
 def _flush_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        # Windows has no directory handle to sync: os.open refuses a directory
+        # outright, so there is nothing here to do rather than something to
+        # skip. The rename that publishes a generation is still atomic.
+        return
     try:
         os.fsync(descriptor)
     except OSError:

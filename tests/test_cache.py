@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -507,3 +508,105 @@ class TestBuildOrLoad:
 
         with pytest.raises(CorpusNotFoundError):
             build_or_load(config_for(tmp_path / "absent", tmp_path / "cache"))
+
+
+class TestPortableDurability:
+    """Publishing a generation must work on Linux, macOS and Windows.
+
+    The three differ in what they will let a process do to a file it has just
+    written, and each difference here is one that stops a build outright
+    rather than degrading it.
+    """
+
+    def test_a_directory_that_cannot_be_opened_is_not_an_error(self, tmp_path, monkeypatch):
+        """Windows refuses to open a directory as a file at all, so there is no
+        handle to sync. That is a platform without the call, not a failed
+        call: it must not stop a generation being published."""
+        import autocomplete.cache as cache_module
+
+        real_open = cache_module.os.open
+
+        def refuse_directories(path, flags, *args, **kwargs):
+            if Path(path).is_dir():
+                raise PermissionError(13, "Permission denied")
+            return real_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(cache_module.os, "open", refuse_directories)
+
+        root = build_tree(tmp_path / "corpus")
+        cache_dir = tmp_path / "cache"
+        generation = save(build_index(root), cache_dir, corpus.fingerprint(root))
+
+        assert (cache_dir / POINTER_FILE).read_text(encoding="utf-8").strip() == (
+            generation.name
+        )
+        assert current_generation_name(cache_dir) == generation.name
+
+    def test_files_are_flushed_through_a_writable_handle_on_windows(
+        self, tmp_path, monkeypatch
+    ):
+        """Windows flushes through the handle, so a read-only one has nothing
+        to commit; POSIX fsyncs the file and takes any descriptor."""
+        import autocomplete.cache as cache_module
+
+        seen: list[int] = []
+        real_open = cache_module.os.open
+
+        def record_flags(path, flags, *args, **kwargs):
+            seen.append(flags)
+            return real_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(cache_module.os, "open", record_flags)
+        monkeypatch.setattr(cache_module, "_IS_WINDOWS", True)
+
+        target = tmp_path / "artifact.bin"
+        target.write_bytes(b"published")
+        cache_module._flush_file(target)
+
+        assert seen == [cache_module.os.O_RDWR]
+
+    def test_the_pointer_rename_waits_out_a_windows_reader(self, tmp_path, monkeypatch):
+        """A server polling CURRENT holds it open for an instant, and Windows
+        makes a rename onto a held file fail instead of queue. Losing an
+        already-built generation to that overlap would be absurd."""
+        import autocomplete.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "_IS_WINDOWS", True)
+
+        attempts = 0
+        real_replace = cache_module.os.replace
+
+        def fail_twice(source, destination):
+            nonlocal attempts
+            attempts += 1
+            if attempts <= 2:
+                raise PermissionError(13, "Permission denied")
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(cache_module.os, "replace", fail_twice)
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        cache_module._point_at(cache_dir, "gen-abcdef012345-0011a2b3")
+
+        assert attempts == 3
+        assert (cache_dir / POINTER_FILE).read_text(encoding="utf-8").strip() == (
+            "gen-abcdef012345-0011a2b3"
+        )
+
+    def test_a_pointer_rename_that_never_succeeds_still_raises(self, tmp_path, monkeypatch):
+        """Retrying is for outlasting a reader, not for hiding a real failure."""
+        import autocomplete.cache as cache_module
+
+        monkeypatch.setattr(cache_module, "_IS_WINDOWS", True)
+        monkeypatch.setattr(cache_module, "_POINTER_REPLACE_TIMEOUT", 0.05)
+
+        def always_fail(source, destination):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(cache_module.os, "replace", always_fail)
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        with pytest.raises(PermissionError):
+            cache_module._point_at(cache_dir, "gen-abcdef012345-0011a2b3")
